@@ -1,13 +1,13 @@
 {
   "name": "waldb",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Node.js bindings for WalDB - High-performance write-ahead log database with tree semantics",
   "main": "index.js",
   "types": "index.d.ts",
   "files": [
     "index.js",
     "index.d.ts",
-    "index.node",
+    "install.js",
     "README.md",
     "LICENSE"
   ],
@@ -15,6 +15,7 @@
     "node": ">=18.0.0"
   },
   "scripts": {
+    "install": "node install.js",
     "build": "cargo-cp-artifact -ac waldb-node index.node -- cargo build --message-format=json-render-diagnostics",
     "build-debug": "npm run build --",
     "build-release": "npm run build -- --release",
