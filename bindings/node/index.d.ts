@@ -146,6 +146,77 @@ declare module '@elkyn/waldb' {
     }): Promise<Array<any>>;
     
     /**
+     * Set a vector embedding
+     * @param path Path to store the vector
+     * @param vector Array of numbers representing the vector
+     */
+    setVector(path: string, vector: number[]): Promise<void>;
+    
+    /**
+     * Get a vector embedding
+     * @param path Path of the vector
+     */
+    getVector(path: string): Promise<number[] | null>;
+    
+    /**
+     * Advanced search with vector similarity, text search, and hybrid scoring
+     * @param options Search options
+     */
+    advancedSearch(options: {
+      pattern: string;
+      filters?: Array<{
+        field: string;
+        op: '==' | '!=' | '>' | '<' | '>=' | '<=';
+        value: string | number | boolean;
+      }>;
+      vector?: {
+        query: number[];
+        field: string;
+        threshold?: number;
+      };
+      text?: {
+        query: string;
+        fields: string[];
+        caseSensitive?: boolean;
+      };
+      scoring?: {
+        vector?: number;
+        text?: number;
+        filter?: number;
+      };
+      limit?: number;
+    }): Promise<Array<Array<[string, any]>>>;
+    
+    /**
+     * Advanced search that returns reconstructed objects with search metadata
+     * @param options Same as advancedSearch()
+     */
+    advancedSearchObjects(options: {
+      pattern: string;
+      filters?: Array<{
+        field: string;
+        op: '==' | '!=' | '>' | '<' | '>=' | '<=';
+        value: string | number | boolean;
+      }>;
+      vector?: {
+        query: number[];
+        field: string;
+        threshold?: number;
+      };
+      text?: {
+        query: string;
+        fields: string[];
+        caseSensitive?: boolean;
+      };
+      scoring?: {
+        vector?: number;
+        text?: number;
+        filter?: number;
+      };
+      limit?: number;
+    }): Promise<Array<any & { _searchMeta?: { vectorScore?: number; textScore?: number; totalScore?: number } }>>;
+    
+    /**
      * Create a Firebase RTDB-style reference
      * @param path The path to reference
      */

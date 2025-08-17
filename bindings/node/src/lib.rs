@@ -473,7 +473,15 @@ fn search(mut cx: FunctionContext) -> JsResult<JsPromise> {
     let store_arc = Arc::clone(&store.store);
     
     std::thread::spawn(move || {
-        let result = store_arc.search(&pattern, filters, limit);
+        let search_options = store::SearchOptions {
+            pattern,
+            filters: Some(filters),
+            vector: None,
+            text: None,
+            scoring: None,
+            limit: Some(limit),
+        };
+        let result = store_arc.search(search_options);
         
         deferred.settle_with(&channel, move |mut cx| {
             match result {
@@ -509,6 +517,285 @@ fn search(mut cx: FunctionContext) -> JsResult<JsPromise> {
     Ok(promise)
 }
 
+// Set vector embedding
+fn set_vector(mut cx: FunctionContext) -> JsResult<JsPromise> {
+    let store = cx.argument::<BoxedStore>(0)?;
+    let path = cx.argument::<JsString>(1)?.value(&mut cx);
+    let vector_array = cx.argument::<JsArray>(2)?;
+    
+    let channel = cx.channel();
+    let (deferred, promise) = cx.promise();
+    
+    // Convert JS array to Vec<f32>
+    let mut vector = Vec::new();
+    for i in 0..vector_array.len(&mut cx) {
+        let val: Handle<JsNumber> = vector_array.get(&mut cx, i)?;
+        vector.push(val.value(&mut cx) as f32);
+    }
+    
+    let store_arc = Arc::clone(&store.store);
+    
+    std::thread::spawn(move || {
+        let result = store_arc.set_vector(&path, vector);
+        
+        deferred.settle_with(&channel, move |mut cx| {
+            match result {
+                Ok(_) => Ok(cx.undefined()),
+                Err(e) => cx.throw_error(format!("Failed to set vector: {}", e))
+            }
+        });
+    });
+    
+    Ok(promise)
+}
+
+// Get vector embedding
+fn get_vector(mut cx: FunctionContext) -> JsResult<JsPromise> {
+    let store = cx.argument::<BoxedStore>(0)?;
+    let path = cx.argument::<JsString>(1)?.value(&mut cx);
+    
+    let channel = cx.channel();
+    let (deferred, promise) = cx.promise();
+    let store_arc = Arc::clone(&store.store);
+    
+    std::thread::spawn(move || {
+        let result = store_arc.get_vector(&path);
+        
+        deferred.settle_with(&channel, move |mut cx| {
+            match result {
+                Ok(Some(vector)) => {
+                    let js_array = cx.empty_array();
+                    for (i, &val) in vector.iter().enumerate() {
+                        let js_val = cx.number(val);
+                        js_array.set(&mut cx, i as u32, js_val)?;
+                    }
+                    Ok(js_array.upcast::<JsValue>())
+                }
+                Ok(None) => Ok(cx.null().upcast::<JsValue>()),
+                Err(e) => cx.throw_error(format!("Failed to get vector: {}", e))
+            }
+        });
+    });
+    
+    Ok(promise)
+}
+
+// Advanced search with vector/text search
+fn advanced_search(mut cx: FunctionContext) -> JsResult<JsPromise> {
+    let store = cx.argument::<BoxedStore>(0)?;
+    let options = cx.argument::<JsObject>(1)?;
+    
+    let channel = cx.channel();
+    let (deferred, promise) = cx.promise();
+    
+    // Parse search options
+    let pattern: Handle<JsString> = options.get(&mut cx, "pattern")?;
+    let pattern = pattern.value(&mut cx);
+    
+    // Parse basic filters
+    let mut filters = None;
+    if let Ok(filters_value) = options.get::<JsValue, _, _>(&mut cx, "filters") {
+        if !filters_value.is_a::<JsUndefined, _>(&mut cx) && !filters_value.is_a::<JsNull, _>(&mut cx) {
+            let filters_array = filters_value.downcast::<JsArray, _>(&mut cx).or_throw(&mut cx)?;
+        let mut parsed_filters = Vec::new();
+        for i in 0..filters_array.len(&mut cx) {
+            let filter: Handle<JsObject> = filters_array.get(&mut cx, i)?;
+            
+            let field: Handle<JsString> = filter.get(&mut cx, "field")?;
+            let op: Handle<JsString> = filter.get(&mut cx, "op")?;
+            let value: Handle<JsString> = filter.get(&mut cx, "value")?;
+            
+            let op = match op.value(&mut cx).as_str() {
+                "==" => store::FilterOp::Eq,
+                "!=" => store::FilterOp::Ne,
+                ">" => store::FilterOp::Gt,
+                ">=" => store::FilterOp::Gte,
+                "<" => store::FilterOp::Lt,
+                "<=" => store::FilterOp::Lte,
+                _ => return cx.throw_error("Invalid filter operator")
+            };
+            
+            parsed_filters.push(store::SearchFilter {
+                field: field.value(&mut cx),
+                op,
+                value: value.value(&mut cx),
+            });
+        }
+            if !parsed_filters.is_empty() {
+                filters = Some(parsed_filters);
+            }
+        }
+    }
+    
+    // Parse vector search options
+    let mut vector_opts = None;
+    if let Ok(vector_value) = options.get::<JsValue, _, _>(&mut cx, "vector") {
+        if !vector_value.is_a::<JsUndefined, _>(&mut cx) && !vector_value.is_a::<JsNull, _>(&mut cx) {
+            let vector_obj = vector_value.downcast::<JsObject, _>(&mut cx).or_throw(&mut cx)?;
+        let query_array: Handle<JsArray> = vector_obj.get(&mut cx, "query")?;
+        let field: Handle<JsString> = vector_obj.get(&mut cx, "field")?;
+        
+        let mut query = Vec::new();
+        for i in 0..query_array.len(&mut cx) {
+            let val: Handle<JsNumber> = query_array.get(&mut cx, i)?;
+            query.push(val.value(&mut cx) as f32);
+        }
+        
+        let threshold = if let Ok(threshold_value) = vector_obj.get::<JsValue, _, _>(&mut cx, "threshold") {
+            if !threshold_value.is_a::<JsUndefined, _>(&mut cx) && !threshold_value.is_a::<JsNull, _>(&mut cx) {
+                let threshold_num = threshold_value.downcast::<JsNumber, _>(&mut cx).or_throw(&mut cx)?;
+                Some(threshold_num.value(&mut cx) as f32)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        
+            vector_opts = Some(store::VectorSearchOptions {
+                query,
+                field: field.value(&mut cx),
+                threshold,
+            });
+        }
+    }
+    
+    // Parse text search options
+    let mut text_opts = None;
+    if let Ok(text_value) = options.get::<JsValue, _, _>(&mut cx, "text") {
+        if !text_value.is_a::<JsUndefined, _>(&mut cx) && !text_value.is_a::<JsNull, _>(&mut cx) {
+            let text_obj = text_value.downcast::<JsObject, _>(&mut cx).or_throw(&mut cx)?;
+        let query: Handle<JsString> = text_obj.get(&mut cx, "query")?;
+        let fields_array: Handle<JsArray> = text_obj.get(&mut cx, "fields")?;
+        
+        let mut fields = Vec::new();
+        for i in 0..fields_array.len(&mut cx) {
+            let field: Handle<JsString> = fields_array.get(&mut cx, i)?;
+            fields.push(field.value(&mut cx));
+        }
+        
+        let case_sensitive = if let Ok(cs_value) = text_obj.get::<JsValue, _, _>(&mut cx, "caseSensitive") {
+            if !cs_value.is_a::<JsUndefined, _>(&mut cx) && !cs_value.is_a::<JsNull, _>(&mut cx) {
+                let cs_bool = cs_value.downcast::<JsBoolean, _>(&mut cx).or_throw(&mut cx)?;
+                Some(cs_bool.value(&mut cx))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        
+            text_opts = Some(store::TextSearchOptions {
+                query: query.value(&mut cx),
+                fields,
+                case_sensitive,
+            });
+        }
+    }
+    
+    // Parse scoring weights
+    let mut scoring = None;
+    if let Ok(scoring_value) = options.get::<JsValue, _, _>(&mut cx, "scoring") {
+        if !scoring_value.is_a::<JsUndefined, _>(&mut cx) && !scoring_value.is_a::<JsNull, _>(&mut cx) {
+            let scoring_obj = scoring_value.downcast::<JsObject, _>(&mut cx).or_throw(&mut cx)?;
+        let vector = if let Ok(v_value) = scoring_obj.get::<JsValue, _, _>(&mut cx, "vector") {
+            if !v_value.is_a::<JsUndefined, _>(&mut cx) && !v_value.is_a::<JsNull, _>(&mut cx) {
+                let v_num = v_value.downcast::<JsNumber, _>(&mut cx).or_throw(&mut cx)?;
+                v_num.value(&mut cx) as f32
+            } else {
+                1.0
+            }
+        } else {
+            1.0
+        };
+        
+        let text = if let Ok(t_value) = scoring_obj.get::<JsValue, _, _>(&mut cx, "text") {
+            if !t_value.is_a::<JsUndefined, _>(&mut cx) && !t_value.is_a::<JsNull, _>(&mut cx) {
+                let t_num = t_value.downcast::<JsNumber, _>(&mut cx).or_throw(&mut cx)?;
+                t_num.value(&mut cx) as f32
+            } else {
+                1.0
+            }
+        } else {
+            1.0
+        };
+        
+        let filter = if let Ok(f_value) = scoring_obj.get::<JsValue, _, _>(&mut cx, "filter") {
+            if !f_value.is_a::<JsUndefined, _>(&mut cx) && !f_value.is_a::<JsNull, _>(&mut cx) {
+                let f_num = f_value.downcast::<JsNumber, _>(&mut cx).or_throw(&mut cx)?;
+                f_num.value(&mut cx) as f32
+            } else {
+                1.0
+            }
+        } else {
+            1.0
+        };
+        
+            scoring = Some(store::ScoringWeights { vector, text, filter });
+        }
+    }
+    
+    // Parse limit
+    let limit = if let Ok(limit_value) = options.get::<JsValue, _, _>(&mut cx, "limit") {
+        if !limit_value.is_a::<JsUndefined, _>(&mut cx) && !limit_value.is_a::<JsNull, _>(&mut cx) {
+            let limit_num = limit_value.downcast::<JsNumber, _>(&mut cx).or_throw(&mut cx)?;
+            Some(limit_num.value(&mut cx) as usize)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    
+    let search_options = store::SearchOptions {
+        pattern,
+        filters,
+        vector: vector_opts,
+        text: text_opts,
+        scoring,
+        limit,
+    };
+    
+    let store_arc = Arc::clone(&store.store);
+    
+    std::thread::spawn(move || {
+        let result = store_arc.search(search_options);
+        
+        deferred.settle_with(&channel, move |mut cx| {
+            match result {
+                Ok(groups) => {
+                    let js_array = cx.empty_array();
+                    
+                    for (i, (group_key, fields)) in groups.iter().enumerate() {
+                        let group_array = cx.empty_array();
+                        
+                        for (j, (key, value)) in fields.iter().enumerate() {
+                            let entry_array = cx.empty_array();
+                            let full_key = if group_key.is_empty() {
+                                key.clone()
+                            } else {
+                                format!("{}/{}", group_key, key)
+                            };
+                            let js_key = cx.string(full_key);
+                            let js_value = cx.string(value);
+                            entry_array.set(&mut cx, 0, js_key)?;
+                            entry_array.set(&mut cx, 1, js_value)?;
+                            group_array.set(&mut cx, j as u32, entry_array)?;
+                        }
+                        
+                        js_array.set(&mut cx, i as u32, group_array)?;
+                    }
+                    
+                    Ok(js_array)
+                }
+                Err(e) => cx.throw_error(format!("Advanced search failed: {}", e))
+            }
+        });
+    });
+    
+    Ok(promise)
+}
+
 #[neon::main]
 fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("open", open)?;
@@ -525,6 +812,9 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("getFile", get_file)?;
     cx.export_function("deleteFile", delete_file)?;
     cx.export_function("search", search)?;
+    cx.export_function("setVector", set_vector)?;
+    cx.export_function("getVector", get_vector)?;
+    cx.export_function("advancedSearch", advanced_search)?;
     
     Ok(())
 }

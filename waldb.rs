@@ -1431,26 +1431,220 @@ impl Store {
         "application/octet-stream"
     }
     
+    // ==================== VECTOR OPERATIONS ====================
+    
+    /// Store a vector (embedding) 
+    pub fn set_vector(&self, path: &str, vector: Vec<f32>) -> io::Result<()> {
+        // Encode vector as special type
+        let encoded = format!("v:{}", vector.iter()
+            .map(|f| f.to_string())
+            .collect::<Vec<_>>()
+            .join(","));
+        self.set(path, &encoded, false)
+    }
+    
+    /// Get a vector
+    pub fn get_vector(&self, path: &str) -> io::Result<Option<Vec<f32>>> {
+        match self.get(path)? {
+            Some(val) if val.starts_with("v:") => {
+                let vec_str = &val[2..];
+                let vector: Result<Vec<f32>, _> = vec_str
+                    .split(',')
+                    .map(|s| s.parse::<f32>())
+                    .collect();
+                Ok(Some(vector.map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?))
+            }
+            _ => Ok(None)
+        }
+    }
+    
     // ==================== SEARCH FUNCTIONALITY ====================
     
-    /// Search with filters, grouping results by subroot
-    pub fn search(&self, pattern: &str, filters: Vec<SearchFilter>, limit: usize) -> io::Result<Vec<(String, HashMap<String, String>)>> {
+    /// Advanced search with filters, vector similarity, and text search
+    pub fn search(&self, options: SearchOptions) -> io::Result<Vec<(String, HashMap<String, String>)>> {
         // Get all entries matching pattern
-        let entries = self.get_pattern(pattern)?;
+        let entries = self.get_pattern(&options.pattern)?;
         
         // Group by subroot
-        let grouped = Self::group_by_subroot(entries, pattern);
+        let mut grouped = Self::group_by_subroot(entries, &options.pattern);
         
-        // Apply filters
-        let mut results: Vec<(String, HashMap<String, String>)> = grouped
+        // Apply filters if provided
+        if let Some(ref filters) = options.filters {
+            if !filters.is_empty() {
+                grouped.retain(|group| Self::matches_filters(group, filters));
+            }
+        }
+        
+        // Apply vector search if requested
+        if let Some(ref vector_opts) = options.vector {
+            grouped = self.apply_vector_search(grouped, vector_opts)?;
+        }
+        
+        // Apply text search if requested
+        if let Some(ref text_opts) = options.text {
+            grouped = Self::apply_text_search(grouped, text_opts);
+        }
+        
+        // Apply hybrid scoring if multiple search types and scoring weights provided
+        if (options.vector.is_some() || options.text.is_some()) && options.scoring.is_some() {
+            grouped = Self::apply_scoring(grouped, options.scoring.as_ref().unwrap());
+        }
+        
+        // Limit results if specified
+        if let Some(limit) = options.limit {
+            grouped.truncate(limit);
+        }
+        
+        Ok(grouped)
+    }
+    
+    fn apply_vector_search(&self, groups: Vec<(String, HashMap<String, String>)>, 
+                           opts: &VectorSearchOptions) -> io::Result<Vec<(String, HashMap<String, String>)>> {
+        // Calculate similarities
+        let mut scored: Vec<(f32, (String, HashMap<String, String>))> = Vec::new();
+        
+        for group in groups {
+            // Find vector field
+            if let Some(vec_str) = group.1.get(&opts.field) {
+                if vec_str.starts_with("v:") {
+                    let vec_data = &vec_str[2..];
+                    let vector: Vec<f32> = vec_data
+                        .split(',')
+                        .filter_map(|s| s.parse::<f32>().ok())
+                        .collect();
+                    
+                    if vector.len() == opts.query.len() {
+                        let similarity = Self::cosine_similarity(&vector, &opts.query);
+                        
+                        // Apply threshold if specified
+                        if opts.threshold.map_or(true, |t| similarity >= t) {
+                            scored.push((similarity, group));
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Sort by similarity (highest first)
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        
+        // Take top K if specified
+        if let Some(threshold) = opts.threshold {
+            scored.retain(|(score, _)| *score >= threshold);
+        }
+        
+        // Extract groups and store scores in metadata
+        Ok(scored.into_iter().map(|(score, mut group)| {
+            group.1.insert("_vector_score".to_string(), score.to_string());
+            group
+        }).collect())
+    }
+    
+    fn apply_text_search(groups: Vec<(String, HashMap<String, String>)>, 
+                        opts: &TextSearchOptions) -> Vec<(String, HashMap<String, String>)> {
+        let query_tokens = Self::tokenize(&opts.query.to_lowercase());
+        
+        groups.into_iter().filter_map(|mut group| {
+            let (_, ref fields) = group;
+            
+            // Check specified fields for text matches
+            let mut score = 0.0f32;
+            let mut matches = 0;
+            
+            for field in &opts.fields {
+                if let Some(value) = fields.get(field) {
+                    let value_lower = value.to_lowercase();
+                    let value_tokens = Self::tokenize(&value_lower);
+                    
+                    // Calculate match score
+                    for query_token in &query_tokens {
+                        if opts.case_sensitive.unwrap_or(false) {
+                            // Case sensitive exact token matching
+                            let case_sensitive_tokens = Self::tokenize(value);
+                            if case_sensitive_tokens.iter().any(|t| t == query_token) {
+                                matches += 1;
+                                score += 1.0;
+                            }
+                        } else {
+                            // Case insensitive fuzzy matching (contains)
+                            if value_lower.contains(query_token) {
+                                matches += 1;
+                                score += 1.0;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if matches > 0 {
+                let normalized_score = score / query_tokens.len() as f32;
+                group.1.insert("_text_score".to_string(), normalized_score.to_string());
+                Some(group)
+            } else {
+                None
+            }
+        }).collect()
+    }
+    
+    fn apply_scoring(groups: Vec<(String, HashMap<String, String>)>, 
+                    scoring: &ScoringWeights) -> Vec<(String, HashMap<String, String>)> {
+        // Calculate combined scores
+        let mut scored: Vec<(f32, (String, HashMap<String, String>))> = groups
             .into_iter()
-            .filter(|group| Self::matches_filters(group, &filters))
+            .map(|group| {
+                let mut total_score = 0.0;
+                
+                // Vector score
+                if let Some(vec_score) = group.1.get("_vector_score") {
+                    if let Ok(score) = vec_score.parse::<f32>() {
+                        total_score += score * scoring.vector;
+                    }
+                }
+                
+                // Text score  
+                if let Some(text_score) = group.1.get("_text_score") {
+                    if let Ok(score) = text_score.parse::<f32>() {
+                        total_score += score * scoring.text;
+                    }
+                }
+                
+                (total_score, group)
+            })
             .collect();
         
-        // Limit results
-        results.truncate(limit);
+        // Sort by combined score
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
         
-        Ok(results)
+        scored.into_iter().map(|(score, mut group)| {
+            group.1.insert("_score".to_string(), score.to_string());
+            group
+        }).collect()
+    }
+    
+    fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+        let mut dot = 0.0;
+        let mut norm_a = 0.0;
+        let mut norm_b = 0.0;
+        
+        for i in 0..a.len() {
+            dot += a[i] * b[i];
+            norm_a += a[i] * a[i];
+            norm_b += b[i] * b[i];
+        }
+        
+        if norm_a == 0.0 || norm_b == 0.0 {
+            return 0.0;
+        }
+        
+        dot / (norm_a.sqrt() * norm_b.sqrt())
+    }
+    
+    fn tokenize(text: &str) -> Vec<String> {
+        text.split_whitespace()
+            .map(|s| s.trim_matches(|c: char| !c.is_alphanumeric()))
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .collect()
     }
     
     fn group_by_subroot(entries: Vec<(String, String)>, pattern: &str) -> Vec<(String, HashMap<String, String>)> {
@@ -1559,6 +1753,38 @@ pub enum FilterOp {
     Gte, // >=
     Lt,  // <
     Lte, // <=
+}
+
+// Advanced search options
+#[derive(Debug, Clone)]
+pub struct SearchOptions {
+    pub pattern: String,
+    pub filters: Option<Vec<SearchFilter>>,
+    pub vector: Option<VectorSearchOptions>,
+    pub text: Option<TextSearchOptions>,
+    pub scoring: Option<ScoringWeights>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct VectorSearchOptions {
+    pub query: Vec<f32>,
+    pub field: String,
+    pub threshold: Option<f32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TextSearchOptions {
+    pub query: String,
+    pub fields: Vec<String>,
+    pub case_sensitive: Option<bool>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScoringWeights {
+    pub vector: f32,
+    pub text: f32,
+    pub filter: f32,
 }
 
 impl StoreInner {

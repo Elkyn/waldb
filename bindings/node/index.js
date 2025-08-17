@@ -410,6 +410,121 @@ class WalDB {
             return this._reconstructFromEntries(entries, groupKey);
         });
     }
+    
+    /**
+     * Set a vector embedding
+     * @param {string} path - Path to store the vector
+     * @param {number[]} vector - Array of numbers representing the vector
+     * @returns {Promise<void>}
+     */
+    async setVector(path, vector) {
+        if (!Array.isArray(vector) || !vector.every(v => typeof v === 'number')) {
+            throw new Error('Vector must be an array of numbers');
+        }
+        return native.setVector(this._store, path, vector);
+    }
+    
+    /**
+     * Get a vector embedding
+     * @param {string} path - Path of the vector
+     * @returns {Promise<number[]|null>} Vector array or null if not found
+     */
+    async getVector(path) {
+        return native.getVector(this._store, path);
+    }
+    
+    /**
+     * Advanced search with vector similarity, text search, and hybrid scoring
+     * @param {Object} options - Search options
+     * @param {string} options.pattern - Pattern to match keys
+     * @param {Array} [options.filters] - Filter conditions
+     * @param {Object} [options.vector] - Vector search options
+     * @param {number[]} options.vector.query - Query vector for similarity search
+     * @param {string} options.vector.field - Field containing vectors to search
+     * @param {number} [options.vector.threshold] - Minimum similarity threshold
+     * @param {Object} [options.text] - Text search options
+     * @param {string} options.text.query - Text query string
+     * @param {string[]} options.text.fields - Fields to search in
+     * @param {boolean} [options.text.caseSensitive] - Case sensitive search
+     * @param {Object} [options.scoring] - Scoring weights for hybrid search
+     * @param {number} [options.scoring.vector] - Weight for vector similarity (default: 1.0)
+     * @param {number} [options.scoring.text] - Weight for text relevance (default: 1.0)
+     * @param {number} [options.scoring.filter] - Weight for filter matches (default: 1.0)
+     * @param {number} [options.limit] - Maximum number of results
+     * @returns {Promise<Array<Array<[string, any]>>>} Array of groups, each group is array of [key, value] pairs
+     */
+    async advancedSearch(options) {
+        // Validate required pattern
+        if (!options.pattern || typeof options.pattern !== 'string') {
+            throw new Error('Pattern is required and must be a string');
+        }
+        
+        // Validate vector search if provided
+        if (options.vector) {
+            if (!Array.isArray(options.vector.query) || !options.vector.query.every(v => typeof v === 'number')) {
+                throw new Error('Vector query must be an array of numbers');
+            }
+            if (!options.vector.field || typeof options.vector.field !== 'string') {
+                throw new Error('Vector field must be a string');
+            }
+        }
+        
+        // Validate text search if provided
+        if (options.text) {
+            if (!options.text.query || typeof options.text.query !== 'string') {
+                throw new Error('Text query must be a string');
+            }
+            if (!Array.isArray(options.text.fields) || !options.text.fields.every(f => typeof f === 'string')) {
+                throw new Error('Text fields must be an array of strings');
+            }
+        }
+        
+        const results = await native.advancedSearch(this._store, options);
+        
+        // Decode values in the results
+        return results.map(group => 
+            group.map(([key, value]) => [key, WalDB._decodeValue(value)])
+        );
+    }
+    
+    /**
+     * Advanced search that returns reconstructed objects
+     * @param {Object} options - Same as advancedSearch()
+     * @returns {Promise<Array<Object>>} Array of reconstructed objects with search metadata
+     */
+    async advancedSearchObjects(options) {
+        const groups = await this.advancedSearch(options);
+        
+        return groups.map(entries => {
+            // Find the group key (shortest key without metadata fields)
+            const nonMetaEntries = entries.filter(([key]) => 
+                !key.endsWith('_vector_score') && !key.endsWith('_text_score') && !key.endsWith('_total_score')
+            );
+            
+            if (nonMetaEntries.length === 0) return {};
+            
+            const groupKey = nonMetaEntries.reduce((min, [key]) => 
+                key.length < min.length ? key : min, nonMetaEntries[0][0]
+            ).split('/').slice(0, -1).join('/');
+            
+            // Reconstruct object from entries
+            const obj = this._reconstructFromEntries(entries, groupKey);
+            
+            // Add search metadata if present
+            const vectorScore = entries.find(([key]) => key.endsWith('_vector_score'));
+            const textScore = entries.find(([key]) => key.endsWith('_text_score'));
+            const totalScore = entries.find(([key]) => key.endsWith('_total_score'));
+            
+            if (vectorScore || textScore || totalScore) {
+                obj._searchMeta = {};
+                if (vectorScore) obj._searchMeta.vectorScore = parseFloat(vectorScore[1]);
+                if (textScore) obj._searchMeta.textScore = parseFloat(textScore[1]);
+                if (totalScore) obj._searchMeta.totalScore = parseFloat(totalScore[1]);
+            }
+            
+            return obj;
+        });
+    }
 }
 
 /**
