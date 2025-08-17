@@ -9,8 +9,5 @@ exclude = ["artifacts.json", "index.node"]
 crate-type = ["cdylib"]
 
 [dependencies]
-neon = "0.10"
-waldb = { path = "../.." }
-
-[build-dependencies]
-neon-build = "0.10"
+neon = "1.1"
+serde_json = "1.0"

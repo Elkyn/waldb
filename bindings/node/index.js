@@ -1,14 +1,16 @@
 // WalDB Node.js API
 // High-level JavaScript interface that provides Firebase RTDB-like API
 
-const { open, set, get, delete: del, exists, getPattern, getRange, listKeys, flush } = require('./index.node');
+const native = require('./index.node');
 
 /**
  * WalDB Database class providing Firebase-like API
  */
 class WalDB {
-    constructor(store) {
-        this._store = store;
+    constructor(storePath) {
+        this._path = storePath;
+        // Validate store can be opened
+        native.open(storePath);
     }
 
     /**
@@ -17,45 +19,45 @@ class WalDB {
      * @returns {WalDB} Database instance
      */
     static open(path) {
-        const store = open(path);
-        return new WalDB(store);
+        return new WalDB(path);
     }
 
     /**
      * Set a value at the given path
-     * @param {string} path - The path to set
+     * @param {string} key - The path to set
      * @param {any} value - The value to set (will be JSON stringified if object)
      * @param {boolean} [force=false] - Whether to force overwrite parent nodes
      */
-    set(path, value, force = false) {
+    set(key, value, force = false) {
         const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
-        set(this._store, path, stringValue, force);
+        native.set(this._path, key, stringValue, force);
     }
 
     /**
      * Get a value or subtree at the given path
-     * @param {string} path - The path to get
+     * @param {string} key - The path to get
      * @returns {any} The value or null if not found
      */
-    get(path) {
-        return get(this._store, path);
+    get(key) {
+        return native.get(this._path, key);
     }
 
     /**
      * Delete a path and all its children
-     * @param {string} path - The path to delete
+     * @param {string} key - The path to delete
      */
-    delete(path) {
-        del(this._store, path);
+    delete(key) {
+        native.delete(this._path, key);
     }
 
     /**
      * Check if a path exists
-     * @param {string} path - The path to check
+     * @param {string} key - The path to check
      * @returns {boolean} True if the path exists
      */
-    exists(path) {
-        return exists(this._store, path);
+    exists(key) {
+        const value = this.get(key);
+        return value !== null && value !== undefined;
     }
 
     /**
@@ -64,7 +66,7 @@ class WalDB {
      * @returns {Object} Object with matching key-value pairs
      */
     getPattern(pattern) {
-        return getPattern(this._store, pattern);
+        return native.getPattern(this._path, pattern);
     }
 
     /**
@@ -74,7 +76,7 @@ class WalDB {
      * @returns {Object} Object with matching key-value pairs
      */
     getRange(start, end) {
-        return getRange(this._store, start, end);
+        return native.getRange(this._path, start, end);
     }
 
     /**
@@ -83,14 +85,15 @@ class WalDB {
      * @returns {string[]} Array of matching keys
      */
     listKeys(prefix) {
-        return listKeys(this._store, prefix);
+        const range = this.getRange(prefix, prefix + '\uffff');
+        return Object.keys(range);
     }
 
     /**
      * Flush pending writes to disk
      */
     flush() {
-        flush(this._store);
+        native.flush(this._path);
     }
 
     /**
