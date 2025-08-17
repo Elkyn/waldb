@@ -5,13 +5,14 @@ const WalDB = require('./index.js');
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const { cleanupTestDir } = require('./test-utils.js');
 
 // Test directory
 const testDir = path.join(__dirname, 'test_waldb_complete_' + process.pid);
 
 // Clean up any existing test directory
 if (fs.existsSync(testDir)) {
-    fs.rmSync(testDir, { recursive: true });
+    fs.rmSync(testDir, { recursive: true, force: true });
 }
 
 console.log('Testing Complete WalDB Firebase Compatibility...\n');
@@ -280,7 +281,7 @@ async function runTests() {
 
     // Clean up
     console.log('\n✅ All Firebase compatibility tests passed!');
-    fs.rmSync(testDir, { recursive: true });
+    await cleanupTestDir(testDir, db);
     process.exit(0);
 }
 
