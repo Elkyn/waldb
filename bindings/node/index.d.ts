@@ -3,7 +3,7 @@
  * TypeScript definitions
  */
 
-declare module '@elkyn/waldb' {
+declare module 'waldb' {
   /**
    * Main database class providing Firebase-like API with async operations
    */
