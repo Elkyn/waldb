@@ -1,6 +1,8 @@
 use neon::prelude::*;
+use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use once_cell::sync::Lazy;
 
 // Include the WalDB implementation directly 
 mod waldb_store {
@@ -9,16 +11,34 @@ mod waldb_store {
 
 use waldb_store::Store;
 
+// Global store cache - stores are thread-safe and can be shared
+static STORE_CACHE: Lazy<Arc<Mutex<HashMap<String, Arc<Store>>>>> = 
+    Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+// Helper function to get or create a cached store
+fn get_or_create_store(path: &str) -> Result<Arc<Store>, String> {
+    let mut cache = STORE_CACHE.lock().map_err(|e| format!("Cache lock error: {}", e))?;
+    
+    if let Some(store) = cache.get(path) {
+        Ok(Arc::clone(store))
+    } else {
+        match Store::open(Path::new(path)) {
+            Ok(store) => {
+                let store_arc = Arc::new(store);
+                cache.insert(path.to_string(), Arc::clone(&store_arc));
+                Ok(store_arc)
+            }
+            Err(e) => Err(format!("Failed to open store: {}", e))
+        }
+    }
+}
+
 fn open_store(mut cx: FunctionContext) -> JsResult<JsString> {
     let path = cx.argument::<JsString>(0)?.value(&mut cx);
     
-    match Store::open(Path::new(&path)) {
-        Ok(_store) => {
-            // For now, just return the path
-            // In production, you'd store this in a reference-counted wrapper
-            Ok(cx.string(path))
-        }
-        Err(e) => cx.throw_error(format!("Failed to open store: {}", e))
+    match get_or_create_store(&path) {
+        Ok(_) => Ok(cx.string(path)),
+        Err(e) => cx.throw_error(e)
     }
 }
 
@@ -31,15 +51,14 @@ fn set_value(mut cx: FunctionContext) -> JsResult<JsUndefined> {
         .map(|b| b.value(&mut cx))
         .unwrap_or(false);
     
-    // Open store fresh each time (not efficient but simple for testing)
-    match Store::open(Path::new(&path)) {
+    match get_or_create_store(&path) {
         Ok(store) => {
             match store.set(&key, &value, force) {
                 Ok(_) => Ok(cx.undefined()),
                 Err(e) => cx.throw_error(format!("Failed to set value: {}", e))
             }
         }
-        Err(e) => cx.throw_error(format!("Failed to open store: {}", e))
+        Err(e) => cx.throw_error(e)
     }
 }
 
@@ -47,7 +66,7 @@ fn get_value(mut cx: FunctionContext) -> JsResult<JsValue> {
     let path = cx.argument::<JsString>(0)?.value(&mut cx);
     let key = cx.argument::<JsString>(1)?.value(&mut cx);
     
-    match Store::open(Path::new(&path)) {
+    match get_or_create_store(&path) {
         Ok(store) => {
             match store.get(&key) {
                 Ok(Some(value)) => {
@@ -65,7 +84,7 @@ fn get_value(mut cx: FunctionContext) -> JsResult<JsValue> {
                 Err(e) => cx.throw_error(format!("Failed to get value: {}", e))
             }
         }
-        Err(e) => cx.throw_error(format!("Failed to open store: {}", e))
+        Err(e) => cx.throw_error(e)
     }
 }
 
@@ -73,14 +92,14 @@ fn delete_key(mut cx: FunctionContext) -> JsResult<JsUndefined> {
     let path = cx.argument::<JsString>(0)?.value(&mut cx);
     let key = cx.argument::<JsString>(1)?.value(&mut cx);
     
-    match Store::open(Path::new(&path)) {
+    match get_or_create_store(&path) {
         Ok(store) => {
             match store.delete(&key) {
                 Ok(_) => Ok(cx.undefined()),
                 Err(e) => cx.throw_error(format!("Failed to delete: {}", e))
             }
         }
-        Err(e) => cx.throw_error(format!("Failed to open store: {}", e))
+        Err(e) => cx.throw_error(e)
     }
 }
 
@@ -88,7 +107,7 @@ fn get_pattern_matches(mut cx: FunctionContext) -> JsResult<JsObject> {
     let path = cx.argument::<JsString>(0)?.value(&mut cx);
     let pattern = cx.argument::<JsString>(1)?.value(&mut cx);
     
-    match Store::open(Path::new(&path)) {
+    match get_or_create_store(&path) {
         Ok(store) => {
             match store.get_pattern(&pattern) {
                 Ok(results) => {
@@ -102,7 +121,7 @@ fn get_pattern_matches(mut cx: FunctionContext) -> JsResult<JsObject> {
                 Err(e) => cx.throw_error(format!("Failed to get pattern: {}", e))
             }
         }
-        Err(e) => cx.throw_error(format!("Failed to open store: {}", e))
+        Err(e) => cx.throw_error(e)
     }
 }
 
@@ -111,7 +130,7 @@ fn get_range_values(mut cx: FunctionContext) -> JsResult<JsObject> {
     let start = cx.argument::<JsString>(1)?.value(&mut cx);
     let end = cx.argument::<JsString>(2)?.value(&mut cx);
     
-    match Store::open(Path::new(&path)) {
+    match get_or_create_store(&path) {
         Ok(store) => {
             match store.get_range(&start, &end) {
                 Ok(results) => {
@@ -125,21 +144,45 @@ fn get_range_values(mut cx: FunctionContext) -> JsResult<JsObject> {
                 Err(e) => cx.throw_error(format!("Failed to get range: {}", e))
             }
         }
-        Err(e) => cx.throw_error(format!("Failed to open store: {}", e))
+        Err(e) => cx.throw_error(e)
     }
 }
 
 fn flush_store(mut cx: FunctionContext) -> JsResult<JsUndefined> {
     let path = cx.argument::<JsString>(0)?.value(&mut cx);
     
-    match Store::open(Path::new(&path)) {
+    match get_or_create_store(&path) {
         Ok(store) => {
             match store.flush() {
                 Ok(_) => Ok(cx.undefined()),
                 Err(e) => cx.throw_error(format!("Failed to flush: {}", e))
             }
         }
-        Err(e) => cx.throw_error(format!("Failed to open store: {}", e))
+        Err(e) => cx.throw_error(e)
+    }
+}
+
+// New function to close a store and remove from cache
+fn close_store(mut cx: FunctionContext) -> JsResult<JsUndefined> {
+    let path = cx.argument::<JsString>(0)?.value(&mut cx);
+    
+    match STORE_CACHE.lock() {
+        Ok(mut cache) => {
+            cache.remove(&path);
+            Ok(cx.undefined())
+        }
+        Err(e) => cx.throw_error(format!("Failed to close store: {}", e))
+    }
+}
+
+// New function to clear all cached stores
+fn clear_cache(mut cx: FunctionContext) -> JsResult<JsUndefined> {
+    match STORE_CACHE.lock() {
+        Ok(mut cache) => {
+            cache.clear();
+            Ok(cx.undefined())
+        }
+        Err(e) => cx.throw_error(format!("Failed to clear cache: {}", e))
     }
 }
 
@@ -185,5 +228,7 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("getPattern", get_pattern_matches)?;
     cx.export_function("getRange", get_range_values)?;
     cx.export_function("flush", flush_store)?;
+    cx.export_function("close", close_store)?;
+    cx.export_function("clearCache", clear_cache)?;
     Ok(())
 }
