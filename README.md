@@ -14,6 +14,9 @@ WalDB is a blazingly fast embedded database with Firebase Realtime Database tree
 - 🚀 **Extreme Performance** - 12,000+ writes/sec, 40,000+ reads/sec (Node.js)
 - 🌲 **Tree Structure** - Native hierarchical data like Firebase RTDB
 - 🔍 **Advanced Search** - Filter queries with multiple conditions and operators
+- 🧮 **Vector Search** - Cosine similarity search on embeddings
+- 📝 **Text Search** - Tokenization, fuzzy matching, case-insensitive search
+- 🎯 **Hybrid Search** - Combine vector, text, and filter signals with custom scoring
 - 📁 **File Storage** - Automatic compression and deduplication for blobs
 - 📚 **Range Queries** - Efficient pagination and scanning
 - 💾 **LSM Tree Architecture** - Log-structured merge tree with compaction
@@ -82,27 +85,64 @@ const names = await db.getPattern('users/*/name');
 
 // Range queries
 const range = await db.getRange('users/alice', 'users/bob');
+
+// Vector search
+await db.setVector('docs/1/embedding', [0.1, 0.2, 0.3]);
+await db.setVector('docs/2/embedding', [0.4, 0.5, 0.6]);
+
+const similar = await db.advancedSearch({
+  pattern: 'docs/*',
+  vector: {
+    query: [0.15, 0.25, 0.35],
+    field: 'embedding',
+    topK: 5
+  },
+  limit: 2
+});
+
+// Hybrid search (vector + text + filters)
+const results = await db.advancedSearch({
+  pattern: 'products/*',
+  text: {
+    query: 'red shirt',
+    fields: ['name', 'description'],
+    fuzzy: true
+  },
+  vector: {
+    query: [0.8, 0.2, 0.1],  // "red" color embedding
+    field: 'color_embedding'
+  },
+  filters: [
+    { field: 'category', op: '==', value: 'clothing' },
+    { field: 'price', op: '<', value: '50' }
+  ],
+  scoring: {
+    vector: 0.4,
+    text: 0.4,
+    filter: 0.2
+  }
+});
 ```
 
 ### CLI
 
 ```bash
-# Install CLI
-cargo install waldb
+# Build from source
+git clone https://github.com/elkyn/waldb
+cd waldb
+cargo build --release --bin waldb-cli
 
-# Interactive shell
-waldb
+# Run interactive shell
+./target/release/waldb-cli ./my_data
 
 waldb> set users/alice/name "Alice Smith"
-waldb> get users/
-{
-  "alice": {
-    "name": "Alice Smith"
-  }
-}
+OK
+waldb> get users/alice/name
+Alice Smith
 waldb> pattern users/*/name
 Found 1 matches:
   users/alice/name = Alice Smith
+waldb> exit
 ```
 
 ## 🏗️ Architecture
@@ -223,21 +263,33 @@ println!("Cache hit rate: {:.2}%", metrics.cache_hit_rate() * 100.0);
 
 ## 🔧 Installation
 
-### Rust
-
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-waldb = "0.1"
-```
-
 ### Building from Source
 
 ```bash
 git clone https://github.com/elkyn/waldb
 cd waldb
+
+# Build Rust library and CLI
 cargo build --release
+
+# Build Node.js bindings (optional)
+cd bindings/node
+npm install
+npm run build-release
+```
+
+### Node.js
+
+```bash
+# Clone and build locally
+git clone https://github.com/elkyn/waldb
+cd waldb/bindings/node
+npm install
+npm run build-release
+
+# Use in your project
+npm link  # In waldb/bindings/node
+npm link @elkyn/waldb  # In your project
 ```
 
 ## 🧪 Testing

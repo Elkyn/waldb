@@ -18,10 +18,11 @@
     "build": "cargo-cp-artifact -ac waldb-node index.node -- cargo build --message-format=json-render-diagnostics",
     "build-debug": "npm run build --",
     "build-release": "npm run build -- --release",
-    "test": "npm run test-fundamentals && npm run test-types && npm run test-complete",
+    "test": "npm run test-fundamentals && npm run test-types && npm run test-complete && npm run test-vector",
     "test-fundamentals": "node test-fundamentals.js",
     "test-types": "node test-types.js",
-    "test-complete": "node test-complete.js"
+    "test-complete": "node test-complete.js",
+    "test-vector": "node test-vector-search.js"
   },
   "keywords": [
     "database",
@@ -41,9 +42,5 @@
   "devDependencies": {
     "cargo-cp-artifact": "^0.1.8",
     "typescript": "^5.9.2"
-  },
-  "dependencies": {
-    "dotenv": "^17.2.1",
-    "mongodb": "^6.18.0"
   }
 }

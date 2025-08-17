@@ -5,11 +5,7 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::time::Instant;
 
-mod waldb_store {
-    include!("waldb.rs");
-}
-
-use waldb_store::Store;
+use waldb::Store;
 
 fn main() -> io::Result<()> {
     println!("🗄️ WalDB CLI v0.1.0");

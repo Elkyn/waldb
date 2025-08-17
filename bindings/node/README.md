@@ -5,7 +5,17 @@ High-performance async Node.js bindings for WalDB, providing a Firebase Realtime
 ## Installation
 
 ```bash
-npm install @elkyn/waldb
+# Clone and build from source
+git clone https://github.com/elkyn/waldb
+cd waldb/bindings/node
+npm install
+npm run build-release
+
+# Link for local development
+npm link
+
+# In your project
+npm link @elkyn/waldb
 ```
 
 ## Features
@@ -17,6 +27,9 @@ npm install @elkyn/waldb
 - 📦 **Three-tier API**: Flexible data access patterns
 - 📁 **File Storage**: Automatic compression and deduplication for blobs
 - 🔍 **Advanced Search**: Filter queries with multiple conditions
+- 🧮 **Vector Search**: Store and search embeddings with cosine similarity
+- 📝 **Text Search**: Full-text search with tokenization and fuzzy matching
+- 🎯 **Hybrid Search**: Combine vector, text, and filters with custom scoring weights
 
 ## Usage
 
@@ -167,6 +180,97 @@ const admins = await db.searchObjects({
 
 // Supported operators: ==, !=, >, <, >=, <=
 // Numeric comparisons work automatically
+```
+
+### Vector Search
+
+```javascript
+// Store embeddings
+await db.setVector('docs/doc1/embedding', [0.1, 0.2, 0.3, 0.4, 0.5]);
+await db.setVector('docs/doc2/embedding', [0.2, 0.3, 0.4, 0.5, 0.6]);
+await db.setVector('docs/doc3/embedding', [0.3, 0.4, 0.5, 0.6, 0.7]);
+
+// Find similar documents
+const similar = await db.advancedSearch({
+  pattern: 'docs/*',
+  vector: {
+    query: [0.15, 0.25, 0.35, 0.45, 0.55],
+    field: 'embedding',
+    topK: 2
+  },
+  limit: 2
+});
+
+// Get embedding
+const embedding = await db.getVector('docs/doc1/embedding');
+console.log(embedding); // [0.1, 0.2, 0.3, 0.4, 0.5]
+```
+
+### Text Search
+
+```javascript
+// Store searchable text
+await db.set('articles/1/title', 'Introduction to WalDB');
+await db.set('articles/1/content', 'WalDB is a high-performance database...');
+await db.set('articles/2/title', 'Advanced WalDB Features');
+await db.set('articles/2/content', 'Learn about vector search and more...');
+
+// Search text fields
+const results = await db.advancedSearch({
+  pattern: 'articles/*',
+  text: {
+    query: 'WalDB features',
+    fields: ['title', 'content'],
+    fuzzy: true,
+    caseInsensitive: true
+  }
+});
+```
+
+### Hybrid Search
+
+```javascript
+// Combine vector similarity, text search, and filters
+const products = await db.advancedSearch({
+  pattern: 'products/*',
+  
+  // Text search
+  text: {
+    query: 'comfortable running shoes',
+    fields: ['name', 'description'],
+    fuzzy: true
+  },
+  
+  // Vector similarity
+  vector: {
+    query: [0.8, 0.2, 0.1, ...],  // Query embedding
+    field: 'embedding',
+    topK: 10
+  },
+  
+  // Filters
+  filters: [
+    { field: 'category', op: '==', value: 'footwear' },
+    { field: 'price', op: '<', value: '150' },
+    { field: 'in_stock', op: '==', value: 'true' }
+  ],
+  
+  // Scoring weights
+  scoring: {
+    vector: 0.4,   // 40% weight to vector similarity
+    text: 0.4,     // 40% weight to text relevance
+    filter: 0.2    // 20% weight to filter matches
+  },
+  
+  limit: 5
+});
+
+// Get as reconstructed objects with scores
+const productObjects = await db.advancedSearchObjects({
+  pattern: 'products/*',
+  // ... same options as above
+});
+// Returns objects with _vector_score, _text_score, _total_score fields
 ```
 
 ### Advanced Features

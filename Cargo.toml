@@ -27,4 +27,4 @@ path = "waldb.rs"
 
 [[bin]]
 name = "waldb-cli"
-path = "waldb.rs"
+path = "waldb_cli.rs"

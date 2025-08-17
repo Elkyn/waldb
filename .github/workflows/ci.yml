@@ -32,12 +32,12 @@ jobs:
     
     - name: Run tests
       run: |
-        rustc tests.rs -o test_runner
+        rustc --edition 2021 tests.rs -o test_runner
         ./test_runner
     
     - name: Run benchmarks
       run: |
-        rustc -O benchmarks.rs -o bench_runner
+        rustc --edition 2021 -O benchmarks.rs -o bench_runner
         ./bench_runner
 
   test-nodejs:

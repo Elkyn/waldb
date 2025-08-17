@@ -5,23 +5,23 @@ all: build
 
 # Build the main binary
 build:
-	@echo "Building Antler..."
-	@rustc -O antler.rs -o antler
+	@echo "Building WalDB..."
+	@cargo build --release
 	@echo "✅ Build complete"
 
 # Run all tests
 test:
 	@echo "Running Test Suite..."
 	@echo "===================="
-	@rustc -O tests.rs -o /tmp/antler_tests 2>/dev/null && /tmp/antler_tests
-	@rm -f /tmp/antler_tests
+	@rustc --edition 2021 -O tests.rs -o /tmp/waldb_tests 2>/dev/null && /tmp/waldb_tests
+	@rm -f /tmp/waldb_tests
 
 # Run benchmarks
 bench:
 	@echo "Running Benchmarks..."
 	@echo "===================="
-	@rustc -O benchmarks.rs -o /tmp/antler_bench 2>/dev/null && /tmp/antler_bench
-	@rm -f /tmp/antler_bench
+	@rustc --edition 2021 -O benchmarks.rs -o /tmp/waldb_bench 2>/dev/null && /tmp/waldb_bench
+	@rm -f /tmp/waldb_bench
 
 # Run tests with coverage report
 coverage:
@@ -49,41 +49,41 @@ coverage:
 # Clean build artifacts and test data
 clean:
 	@echo "Cleaning up..."
-	@rm -f antler
-	@rm -rf /tmp/antler_test_*
-	@rm -rf /tmp/antler_bench_*
+	@cargo clean
+	@rm -rf /tmp/waldb_test_*
+	@rm -rf /tmp/waldb_bench_*
 	@rm -f *.seg *.log
 	@echo "✅ Cleanup complete"
 
 # Install to system
 install: build
-	@echo "Installing Antler..."
+	@echo "Installing WalDB CLI..."
 	@mkdir -p ~/bin
-	@cp antler ~/bin/
-	@echo "✅ Installed to ~/bin/antler"
+	@cp target/release/waldb-cli ~/bin/
+	@echo "✅ Installed to ~/bin/waldb-cli"
 	@echo "Make sure ~/bin is in your PATH"
 
 # Quick test - run a subset of tests
 quick:
 	@echo "Running Quick Tests..."
-	@rustc tests.rs -o /tmp/antler_tests 2>/dev/null
-	@/tmp/antler_tests 2>/dev/null | head -20
-	@rm -f /tmp/antler_tests
+	@rustc --edition 2021 tests.rs -o /tmp/waldb_tests 2>/dev/null
+	@/tmp/waldb_tests 2>/dev/null | head -20
+	@rm -f /tmp/waldb_tests
 	@echo "..."
 	@echo "✅ Quick tests passed"
 
 # Help message
 help:
-	@echo "Antler Build System"
+	@echo "WalDB Build System"
 	@echo "=================="
 	@echo ""
 	@echo "Available targets:"
-	@echo "  make build    - Build the Antler binary"
+	@echo "  make build    - Build the WalDB library and CLI"
 	@echo "  make test     - Run the full test suite"
 	@echo "  make bench    - Run performance benchmarks"
 	@echo "  make coverage - Show test coverage report"
 	@echo "  make clean    - Clean all build artifacts"
-	@echo "  make install  - Install to ~/bin"
+	@echo "  make install  - Install CLI to ~/bin"
 	@echo "  make quick    - Run quick smoke tests"
 	@echo "  make help     - Show this help message"
 	@echo ""

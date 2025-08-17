@@ -45,3 +45,4 @@ package-lock.json
 *.node
 dist/
 **/dist/
+test-runner

@@ -1,11 +1,11 @@
-// WALDB ULTIMATE FIXED - Addressing critical bugs from review
-// Single-file Firebase RTDB-like store with:
-// - FIXED record layout consistency
-// - FIXED last-block bounds with index_start tracking  
-// - REAL group commit with background flusher
-// - DISABLED broken compaction (until proper implementation)
-// - Added manifest for crash safety
-// - Tree semantics enforcement
+// WalDB - High-performance write-ahead log database with tree semantics
+// Features:
+// - Tree-structured key-value store with Firebase RTDB-like semantics
+// - Write-ahead logging with group commit for durability
+// - LSM-tree storage engine with background compaction
+// - Manifest-based crash recovery
+// - Thread-safe concurrent access
+// - Vector and text search capabilities
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File, OpenOptions};
@@ -78,7 +78,7 @@ struct Segment {
     // key_count: usize, // Not currently used but may be useful for stats
     bloom: Option<BloomFilter>,
     index: Vec<(String, u64)>,
-    index_start: u64,  // FIXED: Store where blocks end
+    index_start: u64,  // Offset where the index begins
 }
 
 #[derive(Debug)]
@@ -98,7 +98,7 @@ struct ManifestEntry {
 struct BloomFilter {
     bits: Vec<u8>,
     bit_count: usize,
-    hash_count: usize,  // FIXED: Store hash count
+    hash_count: usize,  // Number of entries in the hash index
 }
 
 #[derive(Debug)]
@@ -336,78 +336,12 @@ impl Store {
     // Removed get_internal - no more JSON reconstruction
         
     
-    fn has_children_in_segments(&self, inner: &std::sync::RwLockReadGuard<StoreInner>, prefix: &str) -> io::Result<bool> {
-        for seg in inner.segments_l0.iter()
-            .chain(inner.segments_l1.iter())
-            .chain(inner.segments_l2.iter())
-        {
-            // Quick check: if any index key starts with prefix, we have children
-            for (key, _) in &seg.index {
-                if key.starts_with(prefix) {
-                    return Ok(true);
-                }
-            }
-        }
-        Ok(false)
-    }
-    
-    fn has_newer_children_in_segments(&self, inner: &std::sync::RwLockReadGuard<StoreInner>, prefix: &str, min_seq: u64) -> io::Result<bool> {
-        for seg in inner.segments_l0.iter()
-            .chain(inner.segments_l1.iter())
-            .chain(inner.segments_l2.iter())
-        {
-            // Use scan_segment to check for newer children
-            for (key, _, seq) in self.scan_segment(seg, prefix, &format!("{}~", prefix))? {
-                if seq > min_seq && !self.covered_by_subtomb(inner, &key, seq) {
-                    return Ok(true);
-                }
-            }
-        }
-        Ok(false)
-    }
-    
-    // Get all entries with a given prefix
-    fn get_prefix_internal(&self, inner: &std::sync::RwLockReadGuard<StoreInner>, prefix: &str) -> io::Result<Vec<(String, String)>> {
-        let mut tree = BTreeMap::new();
-        
-        // Collect from memtable
-        for (k, v) in &inner.memtable {
-            if k.starts_with(prefix) {
-                if let MemValue::Scalar(val, seq) = v {
-                    if !self.covered_by_subtomb(inner, k, *seq) {
-                        tree.insert(k.clone(), (val.clone(), *seq));
-                    }
-                }
-            }
-        }
-        
-        // Collect from segments
-        for seg in inner.segments_l0.iter()
-            .chain(inner.segments_l1.iter())
-            .chain(inner.segments_l2.iter())
-        {
-            for (k, v, seq) in self.scan_segment(seg, prefix, &format!("{}~", prefix))? {
-                if !self.covered_by_subtomb(inner, &k, seq) {
-                    if !tree.contains_key(&k) || tree[&k].1 < seq {
-                        tree.insert(k, (v, seq));
-                    }
-                }
-            }
-        }
-        
-        if tree.is_empty() {
-            return Ok(Vec::new());
-        }
-        
-        // Convert to nested JSON
-        Ok(tree.into_iter().map(|(k, (v, _))| (k, v)).collect())
-    }
-    
-    // Removed tree_to_json - no more JSON reconstruction
+    // Removed unused methods: has_children_in_segments, has_newer_children_in_segments, get_prefix_internal
+    // These were for JSON reconstruction which now happens in the Node.js layer
     
     fn covered_by_subtomb(&self, inner: &std::sync::RwLockReadGuard<StoreInner>, key: &str, seq: u64) -> bool {
         for (prefix, tomb_seq) in &inner.subtombs {
-            if key.starts_with(prefix) && *tomb_seq >= seq {  // FIXED: >= not >
+            if key.starts_with(prefix) && *tomb_seq >= seq {
                 return true;
             }
         }
@@ -429,7 +363,7 @@ impl Store {
         let next_offset = if idx + 1 < seg.index.len() {
             seg.index[idx + 1].1
         } else {
-            seg.index_start  // FIXED: Use index_start, not file len
+            seg.index_start
         };
         
         let block_data = self.cache.get_or_load(&seg.path, *offset, (next_offset - offset) as usize)?;
@@ -458,7 +392,7 @@ impl Store {
             let klen = u32::from_le_bytes(klen_bytes) as usize;
             pos += 4;
             
-            // FIXED: Consistent ordering - klen, vlen, key, value
+            // Block format: klen, vlen, key, value
             if pos + 4 > block_data.len() {
                 break;
             }
@@ -492,66 +426,6 @@ impl Store {
         }
         
         Ok(None)
-    }
-    
-    fn scan_segment(&self, seg: &Arc<Segment>, start: &str, end: &str) -> io::Result<Vec<(String, String, u64)>> {
-        let mut results = Vec::new();
-        
-        for (idx_key, offset) in &seg.index {
-            if idx_key.as_str() >= start && idx_key.as_str() < end {
-                let next_offset = seg.index.iter()
-                    .find(|(k, _)| k > idx_key)
-                    .map(|(_, o)| *o)
-                    .unwrap_or(seg.index_start);  // FIXED: Use index_start
-                
-                let block_data = self.cache.get_or_load(&seg.path, *offset, (next_offset - offset) as usize)?;
-                
-                let mut pos = 0;
-                while pos + 8 < block_data.len() {
-                    let mut seq_bytes = [0u8; 8];
-                    seq_bytes.copy_from_slice(&block_data[pos..pos + 8]);
-                    let seq = u64::from_le_bytes(seq_bytes);
-                    pos += 8;
-                    
-                    if pos >= block_data.len() {
-                        break;
-                    }
-                    
-                    let rec_type = block_data[pos];
-                    pos += 1;
-                    
-                    if pos + 8 > block_data.len() {
-                        break;
-                    }
-                    
-                    let mut klen_bytes = [0u8; 4];
-                    klen_bytes.copy_from_slice(&block_data[pos..pos + 4]);
-                    let klen = u32::from_le_bytes(klen_bytes) as usize;
-                    pos += 4;
-                    
-                    let mut vlen_bytes = [0u8; 4];
-                    vlen_bytes.copy_from_slice(&block_data[pos..pos + 4]);
-                    let vlen = u32::from_le_bytes(vlen_bytes) as usize;
-                    pos += 4;
-                    
-                    if pos + klen + vlen > block_data.len() {
-                        break;
-                    }
-                    
-                    let k = String::from_utf8_lossy(&block_data[pos..pos + klen]);
-                    pos += klen;
-                    
-                    if k.as_ref() >= start && k.as_ref() < end && rec_type == RT_SET {
-                        let v = String::from_utf8_lossy(&block_data[pos..pos + vlen]);
-                        results.push((k.to_string(), v.to_string(), seq));
-                    }
-                    
-                    pos += vlen;
-                }
-            }
-        }
-        
-        Ok(results)
     }
     
     fn flush_memtable_locked(&self, inner: &mut StoreInner) -> io::Result<()> {
@@ -1554,7 +1428,7 @@ impl Store {
             for field in &opts.fields {
                 if let Some(value) = fields.get(field) {
                     let value_lower = value.to_lowercase();
-                    let value_tokens = Self::tokenize(&value_lower);
+                    let _value_tokens = Self::tokenize(&value_lower);
                     
                     // Calculate match score
                     for query_token in &query_tokens {
@@ -2349,197 +2223,6 @@ fn xxhash(data: &[u8], seed: u64) -> u64 {
 
 // Simple pipe-delimited manifest format (no serde dependency)
 
-fn main() -> io::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() != 2 {
-        eprintln!("WalDB CLI - High-performance tree database");
-        eprintln!("\nUsage: {} <directory>", args[0]);
-        eprintln!("\nCommands:");
-        eprintln!("  set <key> <value>      - Set a key-value pair");
-        eprintln!("  set-r <key> <value>    - Set with replace_subtree=true");
-        eprintln!("  get <key>              - Get a value (append / for subtree)");
-        eprintln!("  del <key>              - Delete a key");
-        eprintln!("  del-sub <prefix>       - Delete all keys with prefix");
-        eprintln!("  del-pat <pattern>      - Delete keys matching pattern");
-        eprintln!("  range <start> <end>    - Get range of keys");
-        eprintln!("  pattern <pattern>      - Get keys matching pattern (* and ?)");
-        eprintln!("  scan <prefix> [limit]  - Scan keys with prefix");
-        eprintln!("  stats                  - Show segment statistics");
-        eprintln!("  flush                  - Flush memtable to disk");
-        eprintln!("  help                   - Show this help");
-        eprintln!("  exit                   - Exit the CLI");
-        std::process::exit(1);
-    }
-    
-    let store = Store::open(Path::new(&args[1]))?;
-    let stdin = io::stdin();
-    
-    println!("WalDB CLI connected to: {}", args[1]);
-    println!("Type 'help' for commands or 'exit' to quit\n");
-    
-    for line in stdin.lock().lines() {
-        let line = line?;
-        let parts: Vec<&str> = line.trim().split_whitespace().collect();
-        
-        if parts.is_empty() {
-            continue;
-        }
-        
-        match parts[0] {
-            "set" => {
-                if parts.len() >= 3 {
-                    let key = parts[1];
-                    let value = parts[2..].join(" ");
-                    match store.set(key, &value, false) {
-                        Ok(_) => println!("OK"),
-                        Err(e) => println!("ERROR: {}", e),
-                    }
-                } else {
-                    println!("Usage: set <key> <value>");
-                }
-            }
-            "set-r" => {
-                if parts.len() >= 3 {
-                    let key = parts[1];
-                    let value = parts[2..].join(" ");
-                    match store.set(key, &value, true) {
-                        Ok(_) => println!("OK"),
-                        Err(e) => println!("ERROR: {}", e),
-                    }
-                } else {
-                    println!("Usage: set-r <key> <value>");
-                }
-            }
-            "get" => {
-                if parts.len() >= 2 {
-                    let key = parts[1];
-                    match store.get(key) {
-                        Ok(Some(v)) => println!("{}", v),
-                        Ok(None) => println!("NOT_FOUND"),
-                        Err(e) => println!("ERROR: {}", e),
-                    }
-                } else {
-                    println!("Usage: get <key>");
-                }
-            }
-            "del" => {
-                if parts.len() >= 2 {
-                    match store.delete(parts[1]) {
-                        Ok(_) => println!("OK"),
-                        Err(e) => println!("ERROR: {}", e),
-                    }
-                } else {
-                    println!("Usage: del <key>");
-                }
-            }
-            "del-sub" => {
-                if parts.len() >= 2 {
-                    match store.delete_subtree(parts[1]) {
-                        Ok(_) => println!("OK"),
-                        Err(e) => println!("ERROR: {}", e),
-                    }
-                } else {
-                    println!("Usage: del-sub <prefix>");
-                }
-            }
-            "del-pat" => {
-                if parts.len() >= 2 {
-                    match store.delete_pattern(parts[1]) {
-                        Ok(count) => println!("Deleted {} keys", count),
-                        Err(e) => println!("ERROR: {}", e),
-                    }
-                } else {
-                    println!("Usage: del-pat <pattern>");
-                }
-            }
-            "range" => {
-                if parts.len() >= 3 {
-                    match store.get_range(parts[1], parts[2]) {
-                        Ok(results) => {
-                            for (k, v) in &results {
-                                println!("{}: {}", k, v);
-                            }
-                            println!("Total: {} entries", results.len());
-                        }
-                        Err(e) => println!("ERROR: {}", e),
-                    }
-                } else {
-                    println!("Usage: range <start> <end>");
-                }
-            }
-            "pattern" => {
-                if parts.len() >= 2 {
-                    match store.get_pattern(parts[1]) {
-                        Ok(results) => {
-                            for (k, v) in &results {
-                                println!("{}: {}", k, v);
-                            }
-                            println!("Total: {} matches", results.len());
-                        }
-                        Err(e) => println!("ERROR: {}", e),
-                    }
-                } else {
-                    println!("Usage: pattern <pattern>");
-                }
-            }
-            "scan" => {
-                if parts.len() >= 2 {
-                    let limit = if parts.len() >= 3 {
-                        parts[2].parse().unwrap_or(100)
-                    } else {
-                        100
-                    };
-                    match store.scan_prefix(parts[1], limit) {
-                        Ok(results) => {
-                            for (k, v) in &results {
-                                println!("{}: {}", k, v);
-                            }
-                            println!("Total: {} entries", results.len());
-                        }
-                        Err(e) => println!("ERROR: {}", e),
-                    }
-                } else {
-                    println!("Usage: scan <prefix> [limit]");
-                }
-            }
-            "stats" => {
-                let (l0, l1, l2) = store.segment_counts();
-                println!("Segment Statistics:");
-                println!("  L0 segments: {}", l0);
-                println!("  L1 segments: {}", l1);
-                println!("  L2 segments: {}", l2);
-                println!("  Total segments: {}", l0 + l1 + l2);
-            }
-            "flush" => {
-                match store.flush() {
-                    Ok(_) => println!("OK"),
-                    Err(e) => println!("ERROR: {}", e),
-                }
-            }
-            "help" => {
-                println!("WalDB CLI Commands:");
-                println!("  set <key> <value>      - Set a key-value pair");
-                println!("  set-r <key> <value>    - Set with replace_subtree=true");
-                println!("  get <key>              - Get a value (append / for subtree)");
-                println!("  del <key>              - Delete a key");
-                println!("  del-sub <prefix>       - Delete all keys with prefix");
-                println!("  del-pat <pattern>      - Delete keys matching pattern");
-                println!("  range <start> <end>    - Get range of keys");
-                println!("  pattern <pattern>      - Get keys matching pattern (* and ?)");
-                println!("  scan <prefix> [limit]  - Scan keys with prefix");
-                println!("  stats                  - Show segment statistics");
-                println!("  flush                  - Flush memtable to disk");
-                println!("  help                   - Show this help");
-                println!("  exit                   - Exit the CLI");
-            }
-            "exit" | "quit" => break,
-            _ => println!("Unknown command. Type 'help' for available commands."),
-        }
-    }
-    
-    println!("Goodbye!");
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {
