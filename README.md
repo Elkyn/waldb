@@ -36,11 +36,8 @@ let store = Store::open(Path::new("./my_data"))?;
 store.set("users/alice/name", "Alice Smith", false)?;
 store.set("users/alice/age", "30", false)?;
 
-// Get values
+// Get values  
 let name = store.get("users/alice/name")?; // Some("Alice Smith")
-
-// Get subtree as JSON
-let users = store.get("users/")?; // {"alice": {"name": "Alice Smith", "age": "30"}}
 
 // Pattern matching
 let names = store.get_pattern("users/*/name")?; // All user names
@@ -132,48 +129,34 @@ WalDB uses a sophisticated LSM (Log-Structured Merge) tree architecture:
 - **Compaction**: Background process merging and organizing data
 - **Block Cache**: LRU cache for frequently accessed blocks
 
-## 🎯 Durability Modes
+## 🎯 Architecture
 
-WalDB offers three durability modes to balance between performance and data safety:
+WalDB uses a clean three-layer architecture:
 
-### 1. Strict Mode (Default)
-Every write is immediately synced to disk. Guarantees no data loss even on system crash.
-```rust
-let store = Store::open_with_durability(path, DurabilityMode::Strict)?;
-```
-- **Use when**: Data loss is unacceptable (financial transactions, critical metadata)
-- **Performance**: ~17K writes/sec
-- **Guarantee**: Zero data loss on crash
+### Core Layer (Rust)
+- Handles raw key-value storage with tree semantics
+- LSM-tree implementation with WAL for durability
+- Thread-safe with RwLock protection
+- No JSON reconstruction in core - just raw entries
 
-### 2. Group Mode
-Writes are batched and synced periodically (every 10ms by default).
-```rust
-let store = Store::open_with_durability(path, DurabilityMode::Group)?;
-```
-- **Use when**: Small amount of recent data loss is acceptable for better performance
-- **Performance**: ~50K writes/sec
-- **Guarantee**: Maximum 10ms of data loss on crash
+### FFI Layer
+- Minimal bridge between core and language bindings
+- Passes only string pairs - no complex types
+- Uses std::thread for async operations (no tokio needed)
 
-### 3. FlushSynced Mode
-Writes are only synced during manual flush or when WAL is rotated.
-```rust
-let store = Store::open_with_durability(path, DurabilityMode::FlushSynced)?;
-```
-- **Use when**: Performance is critical, data can be reconstructed if needed
-- **Performance**: ~100K+ writes/sec
-- **Guarantee**: Data persisted only on flush/rotation
+### Language API Layer
+- Each language gets its own idiomatic API
+- JavaScript handles type encoding/decoding
+- Provides convenience methods like `getObject()`
 
 ## 📊 Performance
 
-Benchmarked on Apple M1 Max with 32GB RAM:
-
-| Operation | Throughput | Latency (p50) | Latency (p99) |
-|-----------|------------|---------------|---------------|
-| Write | 17,000/sec | 58µs | 120µs |
-| Read (hot) | 6,000,000/sec | 0.16µs | 0.5µs |
-| Read (cold) | 500,000/sec | 2µs | 10µs |
-| Scan | 2,000,000 keys/sec | - | - |
-| Pattern | 100,000/sec | 10µs | 50µs |
+| Operation | Node.js (via FFI) | Raw Rust | Notes |
+|-----------|------------------|----------|-------|
+| Write | 12,000/sec | 13,000/sec | Similar due to I/O bound |
+| Read | 40,000/sec | 270,000/sec | 6.7x faster without FFI |
+| Pattern Match | 1000 keys in ~3ms | 10,000 keys in ~6ms | Scales linearly |
+| Range Query | - | 10,000 keys in ~4ms | Very efficient |
 
 ## 🌲 Tree Semantics
 
@@ -209,9 +192,8 @@ store.set(key, value, force)?;    // Set a value
 store.delete(key)?;                // Delete key and subtree
 store.flush()?;                    // Force WAL flush
 
-// Read operations
-store.get(key)?;                   // Get value or subtree as JSON
-store.get_raw(key)?;              // Get raw value (no JSON encoding)
+// Read operations  
+store.get(key)?;                   // Get raw value (no JSON reconstruction)
 store.exists(key)?;               // Check if key exists
 
 // Advanced queries
