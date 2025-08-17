@@ -1,0 +1,16 @@
+{
+  "backends": {
+    "github-releases": {
+      "token": "PREBUILD_GITHUB_TOKEN"
+    }
+  },
+  "strip": true,
+  "cache": true,
+  "buildFromSource": "npm run build-release",
+  "targets": [
+    {
+      "runtime": "napi",
+      "target": "6"
+    }
+  ]
+}
