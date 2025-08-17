@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WalDB - High-Performance Tree Database</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+    <style>
+        :root {
+            --primary: #10b981;
+            --primary-hover: #059669;
+        }
+        
+        .hero {
+            text-align: center;
+            padding: 4rem 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            margin-bottom: 3rem;
+        }
+        
+        .hero h1 {
+            font-size: 3.5rem;
+            margin-bottom: 1rem;
+        }
+        
+        .hero p {
+            font-size: 1.25rem;
+            opacity: 0.95;
+        }
+        
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            margin: 3rem 0;
+        }
+        
+        .feature {
+            padding: 1.5rem;
+            border-radius: 8px;
+            background: var(--card-background-color);
+            border: 1px solid var(--muted-border-color);
+        }
+        
+        .feature h3 {
+            color: var(--primary);
+            margin-bottom: 0.5rem;
+        }
+        
+        .benchmark {
+            background: var(--code-background-color);
+            padding: 1rem;
+            border-radius: 4px;
+            margin: 1rem 0;
+        }
+        
+        .benchmark-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid var(--muted-border-color);
+        }
+        
+        .benchmark-item:last-child {
+            border-bottom: none;
+        }
+        
+        .benchmark-value {
+            font-weight: bold;
+            color: var(--primary);
+        }
+        
+        nav.tabs {
+            margin: 2rem 0;
+            border-bottom: 2px solid var(--muted-border-color);
+        }
+        
+        nav.tabs ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            display: flex;
+        }
+        
+        nav.tabs li {
+            margin-right: 2rem;
+        }
+        
+        nav.tabs a {
+            display: block;
+            padding: 1rem 0;
+            text-decoration: none;
+            color: var(--color);
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s;
+        }
+        
+        nav.tabs a:hover,
+        nav.tabs a.active {
+            border-bottom-color: var(--primary);
+            color: var(--primary);
+        }
+        
+        .code-example {
+            margin: 2rem 0;
+        }
+        
+        pre {
+            border-radius: 8px;
+            background: #2d2d2d !important;
+        }
+        
+        .doc-links {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+            margin: 2rem 0;
+        }
+        
+        .doc-link {
+            display: block;
+            padding: 1.5rem;
+            background: var(--card-background-color);
+            border: 1px solid var(--muted-border-color);
+            border-radius: 8px;
+            text-decoration: none;
+            color: var(--color);
+            transition: all 0.3s;
+        }
+        
+        .doc-link:hover {
+            border-color: var(--primary);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        
+        .doc-link h4 {
+            color: var(--primary);
+            margin-bottom: 0.5rem;
+        }
+        
+        footer {
+            margin-top: 4rem;
+            padding: 2rem 0;
+            border-top: 1px solid var(--muted-border-color);
+            text-align: center;
+            color: var(--muted-color);
+        }
+    </style>
+</head>
+<body>
+    <div class="hero">
+        <div class="container">
+            <h1>🗄️ WalDB</h1>
+            <p>High-performance write-ahead log database with tree semantics</p>
+            <p style="margin-top: 2rem;">
+                <a href="https://github.com/elkyn/waldb" role="button" style="margin-right: 1rem;">GitHub</a>
+                <a href="api/waldb/index.html" role="button" class="outline">API Docs</a>
+            </p>
+        </div>
+    </div>
+
+    <main class="container">
+        <section>
+            <h2>⚡ Lightning Fast Performance</h2>
+            <div class="benchmark">
+                <div class="benchmark-item">
+                    <span>Writes (Node.js)</span>
+                    <span class="benchmark-value">12,000+ ops/sec</span>
+                </div>
+                <div class="benchmark-item">
+                    <span>Reads (Node.js)</span>
+                    <span class="benchmark-value">40,000+ ops/sec</span>
+                </div>
+                <div class="benchmark-item">
+                    <span>Reads (Native Rust)</span>
+                    <span class="benchmark-value">270,000+ ops/sec</span>
+                </div>
+                <div class="benchmark-item">
+                    <span>Pattern Match</span>
+                    <span class="benchmark-value">10,000 keys in ~6ms</span>
+                </div>
+            </div>
+        </section>
+
+        <section>
+            <h2>✨ Key Features</h2>
+            <div class="features">
+                <div class="feature">
+                    <h3>🌲 Tree Structure</h3>
+                    <p>Native hierarchical data structure like Firebase Realtime Database. Store your data in paths like <code>users/alice/profile</code>.</p>
+                </div>
+                <div class="feature">
+                    <h3>🔍 Advanced Search</h3>
+                    <p>Vector similarity search, full-text search, and hybrid scoring. Combine multiple signals for powerful queries.</p>
+                </div>
+                <div class="feature">
+                    <h3>💾 LSM Architecture</h3>
+                    <p>Log-structured merge tree with automatic compaction. Optimized for write-heavy workloads.</p>
+                </div>
+                <div class="feature">
+                    <h3>🔄 Thread-Safe</h3>
+                    <p>RwLock protection without async complexity. Safe concurrent access from multiple threads.</p>
+                </div>
+                <div class="feature">
+                    <h3>📁 File Storage</h3>
+                    <p>Automatic deduplication and compression for binary files. Store images, documents, and more.</p>
+                </div>
+                <div class="feature">
+                    <h3>🎯 Type Preservation</h3>
+                    <p>Maintains JavaScript types through the FFI boundary. Numbers stay numbers, booleans stay booleans.</p>
+                </div>
+            </div>
+        </section>
+
+        <section>
+            <h2>🚀 Quick Start</h2>
+            
+            <nav class="tabs">
+                <ul>
+                    <li><a href="#rust-example" class="active" onclick="showTab('rust')">Rust</a></li>
+                    <li><a href="#nodejs-example" onclick="showTab('nodejs')">Node.js</a></li>
+                    <li><a href="#cli-example" onclick="showTab('cli')">CLI</a></li>
+                </ul>
+            </nav>
+
+            <div id="rust-example" class="code-example">
+                <pre><code class="language-rust">use waldb::Store;
+use std::path::Path;
+
+// Open or create a store
+let store = Store::open(Path::new("./my_data"))?;
+
+// Set values
+store.set("users/alice/name", "Alice Smith", false)?;
+store.set("users/alice/age", "30", false)?;
+
+// Get values  
+let name = store.get("users/alice/name")?; // Some("Alice Smith")
+
+// Pattern matching
+let names = store.get_pattern("users/*/name")?;
+
+// Vector search
+store.set_vector("docs/1/embedding", vec![0.1, 0.2, 0.3])?;</code></pre>
+            </div>
+
+            <div id="nodejs-example" class="code-example" style="display: none;">
+                <pre><code class="language-javascript">const WalDB = require('waldb');
+
+// Open database (async)
+const db = await WalDB.open('./my_data');
+
+// Set values - types preserved!
+await db.set('users/alice/name', 'Alice Smith');
+await db.set('users/alice/age', 30);
+
+// Get as object
+const user = await db.getObject('users/alice');
+// { name: 'Alice Smith', age: 30 }
+
+// Vector search
+await db.setVector('docs/1/embedding', [0.1, 0.2, 0.3]);
+
+const similar = await db.advancedSearch({
+  pattern: 'docs/*',
+  vector: {
+    query: [0.15, 0.25, 0.35],
+    field: 'embedding',
+    topK: 5
+  }
+});</code></pre>
+            </div>
+
+            <div id="cli-example" class="code-example" style="display: none;">
+                <pre><code class="language-bash"># Build from source
+cargo build --release --bin waldb-cli
+
+# Run interactive shell
+./target/release/waldb-cli ./my_data
+
+waldb> set users/alice/name "Alice Smith"
+OK
+
+waldb> get users/alice/name
+Alice Smith
+
+waldb> pattern users/*/name
+Found 1 matches:
+  users/alice/name = Alice Smith
+
+waldb> exit</code></pre>
+            </div>
+        </section>
+
+        <section>
+            <h2>📚 Documentation</h2>
+            <div class="doc-links">
+                <a href="api/waldb/index.html" class="doc-link">
+                    <h4>🔧 API Reference</h4>
+                    <p>Complete Rust API documentation with examples</p>
+                </a>
+                <a href="performance.html" class="doc-link">
+                    <h4>⚡ Performance Tuning</h4>
+                    <p>Optimize WalDB for your workload</p>
+                </a>
+                <a href="architecture.html" class="doc-link">
+                    <h4>🏗️ Architecture</h4>
+                    <p>Deep dive into WalDB internals</p>
+                </a>
+            </div>
+        </section>
+
+        <section>
+            <h2>🎯 Use Cases</h2>
+            <p>WalDB is perfect for:</p>
+            <ul>
+                <li><strong>Real-time applications</strong> - Chat apps, collaborative tools, live dashboards</li>
+                <li><strong>IoT data collection</strong> - High-throughput sensor data with hierarchical organization</li>
+                <li><strong>Document stores</strong> - Store and search documents with vector embeddings</li>
+                <li><strong>Configuration management</strong> - Hierarchical config with instant updates</li>
+                <li><strong>Session stores</strong> - Fast key-value access with automatic expiration</li>
+            </ul>
+        </section>
+    </main>
+
+    <footer>
+        <p>Built with ❤️ in Rust | <a href="https://github.com/elkyn/waldb">GitHub</a> | <a href="https://www.npmjs.com/package/waldb">npm</a> | MIT License</p>
+    </footer>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-rust.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-javascript.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-bash.min.js"></script>
+    <script>
+        function showTab(lang) {
+            // Hide all examples
+            document.querySelectorAll('.code-example').forEach(el => {
+                el.style.display = 'none';
+            });
+            
+            // Remove active class from all tabs
+            document.querySelectorAll('.tabs a').forEach(el => {
+                el.classList.remove('active');
+            });
+            
+            // Show selected example
+            document.getElementById(lang + '-example').style.display = 'block';
+            
+            // Add active class to selected tab
+            event.target.classList.add('active');
+            
+            // Prevent default link behavior
+            event.preventDefault();
+        }
+    </script>
+</body>
+</html>

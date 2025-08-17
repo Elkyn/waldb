@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Performance Tuning - WalDB</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+    <style>
+        .metric {
+            background: var(--code-background-color);
+            padding: 1rem;
+            border-radius: 4px;
+            margin: 1rem 0;
+        }
+        
+        .metric code {
+            color: var(--primary);
+            font-weight: bold;
+        }
+        
+        .tip {
+            background: #e0f2fe;
+            border-left: 4px solid #0ea5e9;
+            padding: 1rem;
+            margin: 1rem 0;
+            border-radius: 4px;
+        }
+        
+        .warning {
+            background: #fef3c7;
+            border-left: 4px solid #f59e0b;
+            padding: 1rem;
+            margin: 1rem 0;
+            border-radius: 4px;
+        }
+        
+        table {
+            margin: 2rem 0;
+        }
+        
+        pre {
+            border-radius: 8px;
+            background: #2d2d2d !important;
+        }
+    </style>
+</head>
+<body>
+    <nav class="container">
+        <ul>
+            <li><strong>WalDB Docs</strong></li>
+        </ul>
+        <ul>
+            <li><a href="index.html">Home</a></li>
+            <li><a href="api/waldb/index.html">API</a></li>
+            <li><a href="performance.html" aria-current="page">Performance</a></li>
+        </ul>
+    </nav>
+
+    <main class="container">
+        <h1>⚡ Performance Tuning Guide</h1>
+        
+        <p>WalDB is fast by default, but you can tune it for specific workloads. This guide covers optimization strategies for different use cases.</p>
+
+        <h2>📊 Key Metrics</h2>
+        
+        <div class="metric">
+            <h3>Default Performance</h3>
+            <ul>
+                <li>Writes: <code>12,000+ ops/sec</code> (Node.js), <code>13,000+ ops/sec</code> (Rust)</li>
+                <li>Reads: <code>40,000+ ops/sec</code> (Node.js), <code>270,000+ ops/sec</code> (Rust)</li>
+                <li>Memory: ~100MB cache + memtable size</li>
+                <li>Disk I/O: Group commit every 10ms</li>
+            </ul>
+        </div>
+
+        <h2>🎯 Optimization Strategies</h2>
+
+        <h3>1. Write-Heavy Workloads</h3>
+        
+        <p>For applications with high write throughput (logs, metrics, IoT data):</p>
+        
+        <div class="tip">
+            <strong>💡 Tip:</strong> Batch your writes for maximum throughput
+        </div>
+
+        <pre><code class="language-javascript">// Node.js - Batch writes
+const batch = [];
+for (let i = 0; i < 1000; i++) {
+    batch.push([`metrics/${Date.now()}/${i}`, value]);
+}
+await db.setMany(batch);
+
+// This is faster than individual writes
+// Achieves up to 50,000 writes/sec</code></pre>
+
+        <h4>Tuning Parameters</h4>
+        <table>
+            <thead>
+                <tr>
+                    <th>Parameter</th>
+                    <th>Default</th>
+                    <th>Recommended</th>
+                    <th>Effect</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>MEMTABLE_THRESHOLD</td>
+                    <td>4MB</td>
+                    <td>8-16MB</td>
+                    <td>Less frequent flushes, better write throughput</td>
+                </tr>
+                <tr>
+                    <td>WAL_SYNC_INTERVAL</td>
+                    <td>10ms</td>
+                    <td>20-50ms</td>
+                    <td>Higher throughput, slightly higher latency</td>
+                </tr>
+                <tr>
+                    <td>L0_COMPACTION_TRIGGER</td>
+                    <td>4 files</td>
+                    <td>8 files</td>
+                    <td>Less frequent compaction, more write bandwidth</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h3>2. Read-Heavy Workloads</h3>
+        
+        <p>For applications with mostly reads (content serving, APIs):</p>
+
+        <div class="tip">
+            <strong>💡 Tip:</strong> Maximize cache hit rate
+        </div>
+
+        <pre><code class="language-rust">// Rust - Increase cache size (currently hardcoded)
+// In waldb.rs, modify:
+const CACHE_SIZE: usize = 100 * 1024 * 1024; // 100MB default
+// To:
+const CACHE_SIZE: usize = 500 * 1024 * 1024; // 500MB for read-heavy</code></pre>
+
+        <h4>Best Practices</h4>
+        <ul>
+            <li>Keep frequently accessed data in contiguous key ranges</li>
+            <li>Use pattern queries instead of multiple individual gets</li>
+            <li>Consider caching reconstructed objects in your application</li>
+        </ul>
+
+        <h3>3. Mixed Workloads</h3>
+        
+        <p>For balanced read/write applications:</p>
+
+        <pre><code class="language-javascript">// Optimize for latency over throughput
+await db.flush(); // Force flush after critical writes
+
+// Use async patterns for non-critical operations
+Promise.all([
+    db.set('analytics/event1', data1),
+    db.set('analytics/event2', data2),
+    db.set('analytics/event3', data3)
+]);</code></pre>
+
+        <h2>🔍 Vector Search Optimization</h2>
+
+        <h3>Dimension Reduction</h3>
+        
+        <div class="warning">
+            <strong>⚠️ Warning:</strong> Vector operations are CPU-intensive. Keep dimensions reasonable (< 1000).
+        </div>
+
+        <pre><code class="language-javascript">// Good: Reasonable dimensions
+await db.setVector('doc/1', new Array(384).fill(0)); // BERT-like
+
+// Bad: Too many dimensions
+await db.setVector('doc/1', new Array(4096).fill(0)); // Slow!</code></pre>
+
+        <h3>Hybrid Search Tuning</h3>
+
+        <pre><code class="language-javascript">// Tune scoring weights for your use case
+const results = await db.advancedSearch({
+    pattern: 'products/*',
+    vector: { /* ... */ },
+    text: { /* ... */ },
+    scoring: {
+        vector: 0.6,   // Increase for similarity-focused
+        text: 0.3,     // Increase for keyword-focused
+        filter: 0.1    // Increase for strict filtering
+    }
+});</code></pre>
+
+        <h2>💾 Storage Optimization</h2>
+
+        <h3>Compaction Tuning</h3>
+        
+        <p>Compaction runs automatically but can be tuned:</p>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Scenario</th>
+                    <th>Strategy</th>
+                    <th>Trade-off</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Heavy overwrites</td>
+                    <td>More aggressive compaction</td>
+                    <td>More CPU, less storage</td>
+                </tr>
+                <tr>
+                    <td>Mostly appends</td>
+                    <td>Less frequent compaction</td>
+                    <td>Less CPU, more storage</td>
+                </tr>
+                <tr>
+                    <td>Time-series data</td>
+                    <td>Disable L2 compaction</td>
+                    <td>Optimize for sequential writes</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h3>File Storage</h3>
+
+        <pre><code class="language-javascript">// Files are automatically deduplicated
+// Same content = stored once
+await db.setFile('user1/avatar', imageBuffer);
+await db.setFile('user2/avatar', imageBuffer); // No extra storage!
+
+// Check deduplication is working
+const meta1 = await db.getFileMeta('user1/avatar');
+const meta2 = await db.getFileMeta('user2/avatar');
+console.log(meta1.hash === meta2.hash); // true</code></pre>
+
+        <h2>🚀 Production Checklist</h2>
+
+        <h3>Before Going Live</h3>
+        
+        <ul>
+            <li>✅ Test with production data volumes</li>
+            <li>✅ Monitor segment counts: <code>store.segment_counts()</code></li>
+            <li>✅ Set up regular backups of the data directory</li>
+            <li>✅ Test crash recovery by killing the process</li>
+            <li>✅ Benchmark with your specific access patterns</li>
+        </ul>
+
+        <h3>Monitoring</h3>
+
+        <pre><code class="language-rust">// Get performance metrics
+let (l0, l1, l2) = store.segment_counts();
+println!("Segments: L0={}, L1={}, L2={}", l0, l1, l2);
+
+// Watch for issues:
+// - L0 > 10: Compaction falling behind
+// - L1 > 20: May need more aggressive L1->L2
+// - Growing segment counts: Check disk space</code></pre>
+
+        <h2>🔧 Advanced Tuning</h2>
+
+        <h3>Custom Build Flags</h3>
+
+        <pre><code class="language-bash"># Maximum performance build
+RUSTFLAGS="-C target-cpu=native" cargo build --release
+
+# Link-time optimization (slower build, faster runtime)
+# Already enabled in Cargo.toml:
+# [profile.release]
+# lto = true
+# codegen-units = 1</code></pre>
+
+        <h3>OS-Level Tuning</h3>
+
+        <pre><code class="language-bash"># Linux: Increase file descriptor limits
+ulimit -n 65536
+
+# Tune VM settings for database workloads
+echo 'vm.dirty_background_ratio = 5' >> /etc/sysctl.conf
+echo 'vm.dirty_ratio = 10' >> /etc/sysctl.conf
+
+# Use faster filesystem (ext4 or XFS recommended)
+# Avoid: btrfs (slower for databases)
+# Consider: NVMe SSD for best performance</code></pre>
+
+        <div class="tip">
+            <strong>📈 Benchmark Your Changes:</strong> Always measure before and after tuning. Use <code>rustc benchmarks.rs -O && ./a.out</code> for micro-benchmarks.
+        </div>
+
+        <h2>❓ Common Issues</h2>
+
+        <h3>High Memory Usage</h3>
+        <p>Reduce cache size or memtable threshold. Trade-off: Lower read performance.</p>
+
+        <h3>Slow Compaction</h3>
+        <p>Increase compaction thresholds. Trade-off: More disk usage.</p>
+
+        <h3>Write Stalls</h3>
+        <p>Increase memtable size or add more L0 files before compaction.</p>
+
+        <footer style="margin-top: 4rem; padding: 2rem 0; border-top: 1px solid var(--muted-border-color);">
+            <p><a href="index.html">← Back to Home</a></p>
+        </footer>
+    </main>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-rust.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-javascript.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-bash.min.js"></script>
+</body>
+</html>
