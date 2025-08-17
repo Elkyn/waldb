@@ -67,7 +67,12 @@ jobs:
         
       - name: Install node dependencies
         working-directory: ./bindings/node
-        run: npm ci
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
         
       - name: Build with Cargo (native)
         if: '!matrix.use-cross'
@@ -207,7 +212,12 @@ jobs:
           
       - name: Install dependencies
         working-directory: ./bindings/node
-        run: npm ci
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
         
       - name: Build
         working-directory: ./bindings/node

@@ -58,7 +58,12 @@ jobs:
           
       - name: Install dependencies
         working-directory: ./bindings/node
-        run: npm ci
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
         
       - name: Build native module (standard)
         if: '!matrix.use-cross'

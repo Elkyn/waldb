@@ -21,9 +21,9 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "install": "prebuild-install || npm run build-release",
-    "prebuild": "prebuild --all",
-    "prebuild-cross": "prebuild --runtime napi --target 6 --all --strip",
+    "install": "prebuild-install --runtime napi --target 6 || npm run build-release",
+    "prebuild": "npm run build-release && prebuild --runtime napi --target 6 --strip",
+    "prebuild-all": "npm run build-release && prebuild --runtime napi --target 6 --all --strip",
     "build": "cargo-cp-artifact -ac waldb-node index.node -- cargo build --message-format=json-render-diagnostics",
     "build-debug": "npm run build --",
     "build-release": "npm run build -- --release",
