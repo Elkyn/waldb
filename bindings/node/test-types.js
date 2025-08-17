@@ -204,8 +204,10 @@ await test('Type preservation in range queries', async () => {
     
     assert.strictEqual(results['rangetest/item4'], null);
     
-    assert.deepStrictEqual(results['rangetest/item5'], [1, 2, 3]);
-    assert(Array.isArray(results['rangetest/item5']));
+    // Arrays are now flattened, so we get individual elements
+    assert.strictEqual(results['rangetest/item5/0'], 1);
+    assert.strictEqual(results['rangetest/item5/1'], 2);
+    assert.strictEqual(results['rangetest/item5/2'], 3);
 });
 
 // Test with pattern matching
