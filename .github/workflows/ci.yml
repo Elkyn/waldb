@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test-rust:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        rust: [stable, beta]
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: ${{ matrix.rust }}
+        override: true
+    
+    - name: Build
+      run: cargo build --verbose
+    
+    - name: Run tests
+      run: |
+        rustc tests.rs -o test_runner
+        ./test_runner
+    
+    - name: Run benchmarks
+      run: |
+        rustc -O benchmarks.rs -o bench_runner
+        ./bench_runner
+
+  test-nodejs:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [18, 20, 22]
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: ${{ matrix.node }}
+    
+    - name: Setup Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: stable
+        override: true
+    
+    - name: Install dependencies
+      working-directory: ./bindings/node
+      run: npm ci
+    
+    - name: Build native module
+      working-directory: ./bindings/node
+      run: npm run build-release
+    
+    - name: Run tests
+      working-directory: ./bindings/node
+      run: npm test

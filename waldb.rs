@@ -112,13 +112,13 @@ impl Drop for Store {
     fn drop(&mut self) {
         // Signal shutdown to background threads
         let (lock, cvar) = &*self.wal.shutdown;
-        let mut shutdown = lock.lock().unwrap();
+        let mut shutdown = lock.lock().expect("WAL shutdown lock should not be poisoned");
         *shutdown = true;
         cvar.notify_all();
         
         // Signal compaction thread shutdown
         let (comp_lock, comp_cvar) = &*self.compaction_shutdown;
-        let mut comp_shutdown = comp_lock.lock().unwrap();
+        let mut comp_shutdown = comp_lock.lock().expect("Compaction shutdown lock should not be poisoned");
         *comp_shutdown = true;
         comp_cvar.notify_all();
         
@@ -148,7 +148,7 @@ impl Store {
                 // Silently ignore sync errors - WAL will retry on next interval
                 let _ = wal_clone.sync_now();
                 
-                let shutdown = wal_clone.shutdown.0.lock().unwrap();
+                let shutdown = wal_clone.shutdown.0.lock().expect("WAL shutdown lock should not be poisoned");
                 if *shutdown {
                     break;
                 }
@@ -166,7 +166,7 @@ impl Store {
         };
         
         // Load segments from manifest
-        let manifest_lock = manifest.lock().unwrap();
+        let manifest_lock = manifest.lock().expect("Manifest lock should not be poisoned during initialization");
         for entry in &manifest_lock.entries {
             let seg_path = dir.join(&entry.filename);
             if let Ok(seg) = Segment::open(&seg_path) {
@@ -218,7 +218,7 @@ impl Store {
             }
         }
         
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write().map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Lock poisoned: {}", e)))?;
         inner.seq += 1;
         let seq = inner.seq;
         
@@ -262,7 +262,7 @@ impl Store {
     }
     
     pub fn get(&self, path: &str) -> io::Result<Option<String>> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read().map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Lock poisoned: {}", e)))?;
         
         // Check if this is a subtree query
         if path.ends_with('/') {
@@ -294,7 +294,7 @@ impl Store {
             
             if let Some((val_opt, seq)) = self.get_from_segment(seg, path)? {
                 if !self.covered_by_subtomb(&inner, path, seq) {
-                    if result.is_none() || seq > result.as_ref().unwrap().1 {
+                    if result.is_none() || seq > result.as_ref().expect("Result checked to be Some").1 {
                         result = Some((val_opt, seq));
                     }
                 }
@@ -585,7 +585,7 @@ impl Store {
         
         // Update manifest
         {
-            let mut manifest = self.manifest.lock().unwrap();
+            let mut manifest = self.manifest.lock().map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Manifest lock poisoned: {}", e)))?;
             manifest.add_entry(ManifestEntry {
                 seq_high: seg.seq_high,
                 level: 0,
@@ -603,14 +603,14 @@ impl Store {
     }
     
     pub fn flush(&self) -> io::Result<()> {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write().map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Lock poisoned: {}", e)))?;
         self.flush_memtable_locked(&mut inner)?;
         self.wal.sync_now()?;
         Ok(())
     }
     
     pub fn delete(&self, path: &str) -> io::Result<()> {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write().map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Lock poisoned: {}", e)))?;
         inner.seq += 1;
         let seq = inner.seq;
         
@@ -626,7 +626,7 @@ impl Store {
     }
     
     pub fn segment_counts(&self) -> (usize, usize, usize) {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read().expect("Lock should not be poisoned in segment_counts");
         (inner.segments_l0.len(), inner.segments_l1.len(), inner.segments_l2.len())
     }
     
@@ -635,7 +635,7 @@ impl Store {
     }
     
     pub fn get_range_limit(&self, start: &str, end: &str, limit: usize) -> io::Result<Vec<(String, String)>> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read().map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Lock poisoned: {}", e)))?;
         let mut results = BTreeMap::new();
         
         // Collect from memtable
@@ -785,7 +785,7 @@ impl Store {
     
     // Wildcard pattern matching - supports * (zero or more chars) and ? (single char)
     pub fn get_pattern(&self, pattern: &str) -> io::Result<Vec<(String, String)>> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read().map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Lock poisoned: {}", e)))?;
         let mut results = BTreeMap::new();
         
         // Check memtable
@@ -873,7 +873,7 @@ impl Store {
                 
                 // Check if key matches pattern
                 if Self::matches_pattern(&k, pattern) && !results.contains_key(&k) {
-                    let inner = self.inner.read().unwrap();
+                    let inner = self.inner.read().map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Lock poisoned: {}", e)))?;
                     match rec_type {
                         RT_SET => {
                             let v = String::from_utf8_lossy(&block_data[pos..pos + vlen]).to_string();
@@ -936,7 +936,7 @@ impl Store {
                 // ? matches exactly one character
                 Self::matches_pattern_recursive(&key[1..], &pattern[1..])
             }
-            (Some(&p), None) => false,  // Pattern has more but key is exhausted
+            (Some(&_p), None) => false,  // Pattern has more but key is exhausted
             (Some(&p), Some(&k)) => {
                 // Regular character must match exactly
                 p == k && Self::matches_pattern_recursive(&key[1..], &pattern[1..])
@@ -945,7 +945,7 @@ impl Store {
     }
     
     pub fn delete_subtree(&self, prefix: &str) -> io::Result<()> {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write().map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Lock poisoned: {}", e)))?;
         inner.seq += 1;
         let seq = inner.seq;
         
@@ -973,7 +973,7 @@ impl Store {
             
             // Check for shutdown
             let (lock, _cvar) = &*self.compaction_shutdown;
-            let shutdown = lock.lock().unwrap();
+            let shutdown = lock.lock().expect("Compaction shutdown lock should not be poisoned");
             if *shutdown {
                 break;
             }
@@ -981,7 +981,7 @@ impl Store {
             
             // Check if L0 compaction is needed
             let needs_l0_compaction = {
-                let inner = self.inner.read().unwrap();
+                let inner = self.inner.read().expect("Inner lock should not be poisoned in compaction thread");
                 inner.segments_l0.len() >= L0_COMPACTION_THRESHOLD
             };
             
@@ -995,7 +995,7 @@ impl Store {
             
             // Check if L1 compaction is needed
             let needs_l1_compaction = {
-                let inner = self.inner.read().unwrap();
+                let inner = self.inner.read().expect("Inner lock should not be poisoned in compaction thread");
                 inner.segments_l1.len() >= L1_COMPACTION_THRESHOLD
             };
             
@@ -1011,7 +1011,7 @@ impl Store {
     fn compact_l0_to_l1(&self) -> io::Result<()> {
         // Take segments to compact
         let segments_to_compact = {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = self.inner.write().expect("Inner write lock should not be poisoned in L0 compaction");
             if inner.segments_l0.len() < L0_COMPACTION_THRESHOLD {
                 return Ok(());
             }
@@ -1034,7 +1034,7 @@ impl Store {
         // Create new L1 segment
         let filename = format!("l1_{:010}.seg", SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
+            .expect("System time should be valid")
             .as_secs());
         let new_path = self.dir.join(&filename);
         
@@ -1043,13 +1043,13 @@ impl Store {
         
         // Update state
         {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = self.inner.write().expect("Inner write lock should not be poisoned when updating L1 segments");
             inner.segments_l1.push(Arc::new(merged_segment));
         }
         
         // Update manifest
         {
-            let mut manifest = self.manifest.lock().unwrap();
+            let mut manifest = self.manifest.lock().map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Manifest lock poisoned: {}", e)))?;
             manifest.add_entry(ManifestEntry {
                 seq_high: segments_to_compact.iter()
                     .map(|s| s.seq_high)
@@ -1071,7 +1071,7 @@ impl Store {
     fn compact_l1_to_l2(&self) -> io::Result<()> {
         // Similar to L0->L1 but for L1->L2
         let segments_to_compact = {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = self.inner.write().expect("Inner write lock should not be poisoned in L0 compaction");
             if inner.segments_l1.len() < L1_COMPACTION_THRESHOLD {
                 return Ok(());
             }
@@ -1094,7 +1094,7 @@ impl Store {
         // Create new L2 segment
         let filename = format!("l2_{:010}.seg", SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
+            .expect("System time should be valid")
             .as_secs());
         let new_path = self.dir.join(&filename);
         
@@ -1103,13 +1103,13 @@ impl Store {
         
         // Update state
         {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = self.inner.write().expect("Inner write lock should not be poisoned when updating L2 segments");
             inner.segments_l2.push(Arc::new(merged_segment));
         }
         
         // Update manifest
         {
-            let mut manifest = self.manifest.lock().unwrap();
+            let mut manifest = self.manifest.lock().map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Manifest lock poisoned: {}", e)))?;
             manifest.add_entry(ManifestEntry {
                 seq_high: segments_to_compact.iter()
                     .map(|s| s.seq_high)
@@ -1325,7 +1325,7 @@ impl GroupCommitWAL {
     }
     
     fn append(&self, entry: &WALEntry) -> io::Result<()> {
-        let mut buffer = self.buffer.lock().unwrap();
+        let mut buffer = self.buffer.lock().map_err(|e| io::Error::new(io::ErrorKind::Other, format!("WAL buffer lock poisoned: {}", e)))?;
         buffer.push(WALEntry {
             seq: entry.seq,
             kind: entry.kind,
@@ -1343,7 +1343,7 @@ impl GroupCommitWAL {
     }
     
     fn sync_now(&self) -> io::Result<()> {
-        let mut buffer = self.buffer.lock().unwrap();
+        let mut buffer = self.buffer.lock().map_err(|e| io::Error::new(io::ErrorKind::Other, format!("WAL buffer lock poisoned: {}", e)))?;
         if buffer.is_empty() {
             return Ok(());
         }
@@ -1652,7 +1652,7 @@ impl BlockCache {
         let key = (path.to_path_buf(), offset);
         
         {
-            let cache = self.cache.read().unwrap();
+            let cache = self.cache.read().map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Cache read lock poisoned: {}", e)))?;
             if let Some(data) = cache.get(&key) {
                 return Ok(data.clone());
             }
@@ -1668,8 +1668,8 @@ impl BlockCache {
         let data = Arc::new(data);
         
         // Add to cache
-        let mut cache = self.cache.write().unwrap();
-        let mut size = self.size.write().unwrap();
+        let mut cache = self.cache.write().map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Cache write lock poisoned: {}", e)))?;
+        let mut size = self.size.write().map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Cache size lock poisoned: {}", e)))?;
         
         *size += data.len();
         cache.insert(key, data.clone());
@@ -1785,12 +1785,30 @@ fn xxhash(data: &[u8], seed: u64) -> u64 {
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 2 {
-        eprintln!("Usage: {} <directory>", args[0]);
+        eprintln!("WalDB CLI - High-performance tree database");
+        eprintln!("\nUsage: {} <directory>", args[0]);
+        eprintln!("\nCommands:");
+        eprintln!("  set <key> <value>      - Set a key-value pair");
+        eprintln!("  set-r <key> <value>    - Set with replace_subtree=true");
+        eprintln!("  get <key>              - Get a value (append / for subtree)");
+        eprintln!("  del <key>              - Delete a key");
+        eprintln!("  del-sub <prefix>       - Delete all keys with prefix");
+        eprintln!("  del-pat <pattern>      - Delete keys matching pattern");
+        eprintln!("  range <start> <end>    - Get range of keys");
+        eprintln!("  pattern <pattern>      - Get keys matching pattern (* and ?)");
+        eprintln!("  scan <prefix> [limit]  - Scan keys with prefix");
+        eprintln!("  stats                  - Show segment statistics");
+        eprintln!("  flush                  - Flush memtable to disk");
+        eprintln!("  help                   - Show this help");
+        eprintln!("  exit                   - Exit the CLI");
         std::process::exit(1);
     }
     
     let store = Store::open(Path::new(&args[1]))?;
     let stdin = io::stdin();
+    
+    println!("WalDB CLI connected to: {}", args[1]);
+    println!("Type 'help' for commands or 'exit' to quit\n");
     
     for line in stdin.lock().lines() {
         let line = line?;
@@ -1805,47 +1823,153 @@ fn main() -> io::Result<()> {
                 if parts.len() >= 3 {
                     let key = parts[1];
                     let value = parts[2..].join(" ");
-                    store.set(key, &value, false)?;
-                    println!("OK");
+                    match store.set(key, &value, false) {
+                        Ok(_) => println!("OK"),
+                        Err(e) => println!("ERROR: {}", e),
+                    }
+                } else {
+                    println!("Usage: set <key> <value>");
                 }
             }
             "set-r" => {
                 if parts.len() >= 3 {
                     let key = parts[1];
                     let value = parts[2..].join(" ");
-                    store.set(key, &value, true)?;
-                    println!("OK");
+                    match store.set(key, &value, true) {
+                        Ok(_) => println!("OK"),
+                        Err(e) => println!("ERROR: {}", e),
+                    }
+                } else {
+                    println!("Usage: set-r <key> <value>");
                 }
             }
             "get" => {
                 if parts.len() >= 2 {
                     let key = parts[1];
-                    match store.get(key)? {
-                        Some(v) => println!("{}", v),
-                        None => println!("NOT_FOUND"),
+                    match store.get(key) {
+                        Ok(Some(v)) => println!("{}", v),
+                        Ok(None) => println!("NOT_FOUND"),
+                        Err(e) => println!("ERROR: {}", e),
                     }
+                } else {
+                    println!("Usage: get <key>");
                 }
             }
             "del" => {
                 if parts.len() >= 2 {
-                    store.delete(parts[1])?;
-                    println!("OK");
+                    match store.delete(parts[1]) {
+                        Ok(_) => println!("OK"),
+                        Err(e) => println!("ERROR: {}", e),
+                    }
+                } else {
+                    println!("Usage: del <key>");
                 }
             }
             "del-sub" => {
                 if parts.len() >= 2 {
-                    store.delete_subtree(parts[1])?;
-                    println!("OK");
+                    match store.delete_subtree(parts[1]) {
+                        Ok(_) => println!("OK"),
+                        Err(e) => println!("ERROR: {}", e),
+                    }
+                } else {
+                    println!("Usage: del-sub <prefix>");
                 }
             }
-            "flush" => {
-                store.flush()?;
-                println!("OK");
+            "del-pat" => {
+                if parts.len() >= 2 {
+                    match store.delete_pattern(parts[1]) {
+                        Ok(count) => println!("Deleted {} keys", count),
+                        Err(e) => println!("ERROR: {}", e),
+                    }
+                } else {
+                    println!("Usage: del-pat <pattern>");
+                }
             }
-            "exit" => break,
-            _ => println!("Unknown command"),
+            "range" => {
+                if parts.len() >= 3 {
+                    match store.get_range(parts[1], parts[2]) {
+                        Ok(results) => {
+                            for (k, v) in &results {
+                                println!("{}: {}", k, v);
+                            }
+                            println!("Total: {} entries", results.len());
+                        }
+                        Err(e) => println!("ERROR: {}", e),
+                    }
+                } else {
+                    println!("Usage: range <start> <end>");
+                }
+            }
+            "pattern" => {
+                if parts.len() >= 2 {
+                    match store.get_pattern(parts[1]) {
+                        Ok(results) => {
+                            for (k, v) in &results {
+                                println!("{}: {}", k, v);
+                            }
+                            println!("Total: {} matches", results.len());
+                        }
+                        Err(e) => println!("ERROR: {}", e),
+                    }
+                } else {
+                    println!("Usage: pattern <pattern>");
+                }
+            }
+            "scan" => {
+                if parts.len() >= 2 {
+                    let limit = if parts.len() >= 3 {
+                        parts[2].parse().unwrap_or(100)
+                    } else {
+                        100
+                    };
+                    match store.scan_prefix(parts[1], limit) {
+                        Ok(results) => {
+                            for (k, v) in &results {
+                                println!("{}: {}", k, v);
+                            }
+                            println!("Total: {} entries", results.len());
+                        }
+                        Err(e) => println!("ERROR: {}", e),
+                    }
+                } else {
+                    println!("Usage: scan <prefix> [limit]");
+                }
+            }
+            "stats" => {
+                let (l0, l1, l2) = store.segment_counts();
+                println!("Segment Statistics:");
+                println!("  L0 segments: {}", l0);
+                println!("  L1 segments: {}", l1);
+                println!("  L2 segments: {}", l2);
+                println!("  Total segments: {}", l0 + l1 + l2);
+            }
+            "flush" => {
+                match store.flush() {
+                    Ok(_) => println!("OK"),
+                    Err(e) => println!("ERROR: {}", e),
+                }
+            }
+            "help" => {
+                println!("WalDB CLI Commands:");
+                println!("  set <key> <value>      - Set a key-value pair");
+                println!("  set-r <key> <value>    - Set with replace_subtree=true");
+                println!("  get <key>              - Get a value (append / for subtree)");
+                println!("  del <key>              - Delete a key");
+                println!("  del-sub <prefix>       - Delete all keys with prefix");
+                println!("  del-pat <pattern>      - Delete keys matching pattern");
+                println!("  range <start> <end>    - Get range of keys");
+                println!("  pattern <pattern>      - Get keys matching pattern (* and ?)");
+                println!("  scan <prefix> [limit]  - Scan keys with prefix");
+                println!("  stats                  - Show segment statistics");
+                println!("  flush                  - Flush memtable to disk");
+                println!("  help                   - Show this help");
+                println!("  exit                   - Exit the CLI");
+            }
+            "exit" | "quit" => break,
+            _ => println!("Unknown command. Type 'help' for available commands."),
         }
     }
     
+    println!("Goodbye!");
     Ok(())
 }

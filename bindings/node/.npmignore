@@ -1,0 +1,24 @@
+# Build artifacts
+target/
+dist/
+*.node.bak
+
+# Development files
+Cargo.toml
+Cargo.lock
+build.rs
+src/
+
+# Test files
+test.js
+waldb-ffi.js
+*_test_*
+*_bench_*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
