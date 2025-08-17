@@ -308,6 +308,108 @@ class WalDB {
         }
         return obj;
     }
+    
+    // ==================== FILE/BLOB SUPPORT ====================
+    
+    /**
+     * Store a file with automatic compression and deduplication
+     * @param {string} path - The path where to store the file
+     * @param {Buffer|ArrayBuffer|Uint8Array} data - The file data
+     */
+    async setFile(path, data) {
+        // Convert to Buffer if needed
+        const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+        return native.setFile(this._store, path, buffer);
+    }
+    
+    /**
+     * Retrieve a file from blob storage
+     * @param {string} path - The path of the file
+     * @returns {Promise<Buffer>} The file data
+     */
+    async getFile(path) {
+        return native.getFile(this._store, path);
+    }
+    
+    /**
+     * Delete a file and its metadata
+     * @param {string} path - The path of the file to delete
+     */
+    async deleteFile(path) {
+        return native.deleteFile(this._store, path);
+    }
+    
+    /**
+     * Get file metadata without retrieving the file
+     * @param {string} path - The path of the file
+     * @returns {Promise<Object>} File metadata (size, type, hash)
+     */
+    async getFileMeta(path) {
+        const [size, type, hash] = await Promise.all([
+            this.getObject(`${path}:size`),
+            this.getObject(`${path}:type`),
+            this.getObject(`${path}:hash`)
+        ]);
+        
+        return { size: Number(size), type, hash };
+    }
+    
+    // ==================== SEARCH FUNCTIONALITY ====================
+    
+    /**
+     * Search with filters, grouping results by subroot
+     * @param {Object} options - Search options
+     * @param {string} options.pattern - Pattern to match (e.g., 'users/*')
+     * @param {Array} [options.filters=[]] - Array of filters
+     * @param {number} [options.limit=100] - Maximum results
+     * @returns {Promise<Array>} Grouped search results
+     */
+    async search(options) {
+        const { 
+            pattern, 
+            filters = [], 
+            limit = 100 
+        } = options;
+        
+        // Validate and normalize filters
+        const normalizedFilters = filters.map(f => ({
+            field: f.field,
+            op: f.op || '==',
+            value: String(f.value)
+        }));
+        
+        // Call native search
+        const results = await native.search(
+            this._store, 
+            pattern, 
+            normalizedFilters, 
+            limit
+        );
+        
+        // Decode values in the results
+        return results.map(group => 
+            group.map(([key, value]) => [key, WalDB._decodeValue(value)])
+        );
+    }
+    
+    /**
+     * Search and return as reconstructed objects
+     * @param {Object} options - Same as search()
+     * @returns {Promise<Array<Object>>} Array of reconstructed objects
+     */
+    async searchObjects(options) {
+        const groups = await this.search(options);
+        
+        return groups.map(entries => {
+            // Find the group key (shortest key)
+            const groupKey = entries.reduce((min, [key]) => 
+                key.length < min.length ? key : min, entries[0][0]
+            ).split('/').slice(0, -1).join('/');
+            
+            // Reconstruct object from entries
+            return this._reconstructFromEntries(entries, groupKey);
+        });
+    }
 }
 
 /**

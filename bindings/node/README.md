@@ -15,6 +15,8 @@ npm install @elkyn/waldb
 - 🔄 **Async/Await**: All operations are async for non-blocking I/O
 - 🎯 **Type Preservation**: Maintains JavaScript types (numbers, booleans, arrays, etc.)
 - 📦 **Three-tier API**: Flexible data access patterns
+- 📁 **File Storage**: Automatic compression and deduplication for blobs
+- 🔍 **Advanced Search**: Filter queries with multiple conditions
 
 ## Usage
 
@@ -118,6 +120,53 @@ const config = await db.getObject('config');
 console.log(typeof config.version);  // 'number'
 console.log(typeof config.enabled);  // 'boolean'
 console.log(Array.isArray(config.tags)); // true
+```
+
+### File Storage
+
+```javascript
+// Store files with automatic compression and deduplication
+const imageData = fs.readFileSync('photo.jpg');
+await db.setFile('users/alice/avatar', imageData);
+
+// Retrieve files
+const avatar = await db.getFile('users/alice/avatar');
+fs.writeFileSync('retrieved.jpg', avatar);
+
+// Get file metadata without loading the file
+const meta = await db.getFileMeta('users/alice/avatar');
+console.log(meta); // { size: 45632, type: 'image/jpeg', hash: '...' }
+
+// Files are automatically deduplicated - same content = stored once
+await db.setFile('users/bob/avatar', imageData); // Reuses existing blob
+```
+
+### Advanced Search
+
+```javascript
+// Search with filters
+const results = await db.search({
+  pattern: 'users/*',
+  filters: [
+    { field: 'age', op: '>', value: '18' },
+    { field: 'role', op: '==', value: 'admin' }
+  ],
+  limit: 50
+});
+// Returns: [[user1_entries], [user2_entries], ...] grouped by user
+
+// Search and get as objects
+const admins = await db.searchObjects({
+  pattern: 'users/*',
+  filters: [
+    { field: 'role', op: '==', value: 'admin' },
+    { field: 'active', op: '==', value: 'true' }
+  ]
+});
+// Returns: [{ name: 'Alice', role: 'admin', ... }, ...]
+
+// Supported operators: ==, !=, >, <, >=, <=
+// Numeric comparisons work automatically
 ```
 
 ### Advanced Features

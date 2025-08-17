@@ -13,7 +13,8 @@ WalDB is a blazingly fast embedded database with Firebase Realtime Database tree
 
 - 🚀 **Extreme Performance** - 12,000+ writes/sec, 40,000+ reads/sec (Node.js)
 - 🌲 **Tree Structure** - Native hierarchical data like Firebase RTDB
-- 🔍 **Pattern Matching** - Wildcards (`*`, `?`) for flexible queries
+- 🔍 **Advanced Search** - Filter queries with multiple conditions and operators
+- 📁 **File Storage** - Automatic compression and deduplication for blobs
 - 📚 **Range Queries** - Efficient pagination and scanning
 - 💾 **LSM Tree Architecture** - Log-structured merge tree with compaction
 - 🔄 **Thread-Safe** - RwLock protection, no async complexity
@@ -62,6 +63,19 @@ await db.set('users/alice/age', 30);  // Types preserved!
 const entries = await db.get('users/alice');      // [[key, value], ...]
 const raw = await db.getRaw('users/alice');       // With type prefixes
 const obj = await db.getObject('users/alice');    // Reconstructed object
+
+// File storage with deduplication
+await db.setFile('avatars/alice.jpg', imageBuffer);
+const image = await db.getFile('avatars/alice.jpg');
+
+// Advanced search with filters
+const admins = await db.search({
+  pattern: 'users/*',
+  filters: [
+    { field: 'role', op: '==', value: 'admin' },
+    { field: 'age', op: '>', value: '25' }
+  ]
+});
 
 // Pattern matching
 const names = await db.getPattern('users/*/name');

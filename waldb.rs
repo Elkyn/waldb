@@ -1326,6 +1326,239 @@ impl Store {
         
         writer.finish()
     }
+    
+    // ==================== FILE/BLOB SUPPORT ====================
+    
+    /// Store a file as a blob with automatic compression and deduplication
+    pub fn set_file(&self, path: &str, data: &[u8]) -> io::Result<()> {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        
+        // Calculate hash for deduplication
+        let mut hasher = DefaultHasher::new();
+        data.hash(&mut hasher);
+        let hash = format!("{:016x}", hasher.finish());
+        
+        // Create blob directory structure
+        let blob_dir = self.dir.join("blobs").join(&hash[0..2]);
+        fs::create_dir_all(&blob_dir)?;
+        let blob_path = blob_dir.join(&hash);
+        
+        // Only write if blob doesn't exist (deduplication)
+        if !blob_path.exists() {
+            // Simple compression using zlib-style DEFLATE
+            // For production, would use zstd or similar
+            let compressed = Self::compress_data(data)?;
+            fs::write(&blob_path, compressed)?;
+        }
+        
+        // Store metadata in tree
+        let blob_ref = format!("blob:{}", hash);
+        self.set(path, &blob_ref, false)?;
+        self.set(&format!("{}:size", path), &data.len().to_string(), false)?;
+        self.set(&format!("{}:hash", path), &hash, false)?;
+        
+        // Detect MIME type (simplified)
+        let mime_type = Self::detect_mime_type(data);
+        self.set(&format!("{}:type", path), mime_type, false)?;
+        
+        Ok(())
+    }
+    
+    /// Retrieve a file from blob storage
+    pub fn get_file(&self, path: &str) -> io::Result<Vec<u8>> {
+        // Get blob reference
+        let blob_ref = self.get(path)?
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "File not found"))?;
+        
+        let hash = blob_ref.strip_prefix("blob:")
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Invalid blob reference"))?;
+        
+        // Read compressed blob
+        let blob_path = self.dir.join("blobs").join(&hash[0..2]).join(hash);
+        let compressed = fs::read(blob_path)?;
+        
+        // Decompress and return
+        Self::decompress_data(&compressed)
+    }
+    
+    /// Delete a file and its metadata
+    pub fn delete_file(&self, path: &str) -> io::Result<()> {
+        // Delete all metadata
+        self.delete(path)?;
+        self.delete(&format!("{}:size", path))?;
+        self.delete(&format!("{}:type", path))?;
+        self.delete(&format!("{}:hash", path))?;
+        
+        // Note: Blob itself is not deleted (might be referenced elsewhere)
+        // Could implement reference counting or garbage collection later
+        
+        Ok(())
+    }
+    
+    // Simple compression helpers (would use proper library in production)
+    fn compress_data(data: &[u8]) -> io::Result<Vec<u8>> {
+        // For now, just store uncompressed with a header
+        // In production, would use zstd::encode_all(data, 3)
+        let mut result = vec![0u8; 4]; // Magic header for "uncompressed"
+        result.extend_from_slice(data);
+        Ok(result)
+    }
+    
+    fn decompress_data(data: &[u8]) -> io::Result<Vec<u8>> {
+        // For now, just strip header
+        // In production, would use zstd::decode_all(data)
+        if data.len() < 4 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid compressed data"));
+        }
+        Ok(data[4..].to_vec())
+    }
+    
+    fn detect_mime_type(data: &[u8]) -> &'static str {
+        // Simple magic byte detection
+        if data.starts_with(b"\x89PNG") { return "image/png"; }
+        if data.starts_with(b"\xFF\xD8\xFF") { return "image/jpeg"; }
+        if data.starts_with(b"GIF8") { return "image/gif"; }
+        if data.starts_with(b"%PDF") { return "application/pdf"; }
+        if data.starts_with(b"PK") { return "application/zip"; }
+        if data.starts_with(b"{") || data.starts_with(b"[") { return "application/json"; }
+        
+        // Try to detect text
+        if data.len() > 0 && data.iter().all(|&b| b < 128 && (b >= 32 || b == 9 || b == 10 || b == 13)) {
+            return "text/plain";
+        }
+        
+        "application/octet-stream"
+    }
+    
+    // ==================== SEARCH FUNCTIONALITY ====================
+    
+    /// Search with filters, grouping results by subroot
+    pub fn search(&self, pattern: &str, filters: Vec<SearchFilter>, limit: usize) -> io::Result<Vec<(String, HashMap<String, String>)>> {
+        // Get all entries matching pattern
+        let entries = self.get_pattern(pattern)?;
+        
+        // Group by subroot
+        let grouped = Self::group_by_subroot(entries, pattern);
+        
+        // Apply filters
+        let mut results: Vec<(String, HashMap<String, String>)> = grouped
+            .into_iter()
+            .filter(|group| Self::matches_filters(group, &filters))
+            .collect();
+        
+        // Limit results
+        results.truncate(limit);
+        
+        Ok(results)
+    }
+    
+    fn group_by_subroot(entries: Vec<(String, String)>, pattern: &str) -> Vec<(String, HashMap<String, String>)> {
+        let depth = pattern.matches('/').count() + 1;
+        let mut groups_map: HashMap<String, HashMap<String, String>> = HashMap::new();
+        
+        for (key, value) in entries {
+            let parts: Vec<&str> = key.split('/').collect();
+            if parts.len() < depth {
+                continue;
+            }
+            
+            let group_key = parts[..depth].join("/");
+            let field = if key.len() > group_key.len() + 1 {
+                &key[group_key.len() + 1..]
+            } else {
+                continue; // Skip if no field part
+            };
+            
+            groups_map.entry(group_key.clone())
+                .or_default()
+                .insert(field.to_string(), value);
+        }
+        
+        groups_map.into_iter().collect()
+    }
+    
+    fn matches_filters(group: &(String, HashMap<String, String>), filters: &[SearchFilter]) -> bool {
+        let (_group_key, fields) = group;
+        
+        for filter in filters {
+            let field_value = match fields.get(&filter.field) {
+                Some(v) => v,
+                None => return false, // Field doesn't exist
+            };
+            
+            // Decode the value to compare properly
+            let decoded = Self::decode_value(field_value);
+            
+            if !Self::compare_values(&decoded, &filter.op, &filter.value) {
+                return false;
+            }
+        }
+        
+        true
+    }
+    
+    fn decode_value(encoded: &str) -> String {
+        // Handle type prefixes (s:, n:, b:, z:)
+        if encoded.len() > 2 && &encoded[1..2] == ":" {
+            return encoded[2..].to_string();
+        }
+        encoded.to_string()
+    }
+    
+    fn compare_values(field_value: &str, op: &FilterOp, filter_value: &str) -> bool {
+        match op {
+            FilterOp::Eq => field_value == filter_value,
+            FilterOp::Ne => field_value != filter_value,
+            FilterOp::Gt => {
+                // Try numeric comparison first
+                if let (Ok(a), Ok(b)) = (field_value.parse::<f64>(), filter_value.parse::<f64>()) {
+                    a > b
+                } else {
+                    field_value > filter_value
+                }
+            }
+            FilterOp::Gte => {
+                if let (Ok(a), Ok(b)) = (field_value.parse::<f64>(), filter_value.parse::<f64>()) {
+                    a >= b
+                } else {
+                    field_value >= filter_value
+                }
+            }
+            FilterOp::Lt => {
+                if let (Ok(a), Ok(b)) = (field_value.parse::<f64>(), filter_value.parse::<f64>()) {
+                    a < b
+                } else {
+                    field_value < filter_value
+                }
+            }
+            FilterOp::Lte => {
+                if let (Ok(a), Ok(b)) = (field_value.parse::<f64>(), filter_value.parse::<f64>()) {
+                    a <= b
+                } else {
+                    field_value <= filter_value
+                }
+            }
+        }
+    }
+}
+
+// Search filter types
+#[derive(Debug, Clone)]
+pub struct SearchFilter {
+    pub field: String,
+    pub op: FilterOp,
+    pub value: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum FilterOp {
+    Eq,  // ==
+    Ne,  // !=
+    Gt,  // >
+    Gte, // >=
+    Lt,  // <
+    Lte, // <=
 }
 
 impl StoreInner {

@@ -1,4 +1,5 @@
 use neon::prelude::*;
+use neon::types::buffer::TypedArray;
 use std::sync::Arc;
 use std::path::Path;
 
@@ -356,6 +357,158 @@ fn get_range_entries(mut cx: FunctionContext) -> JsResult<JsPromise> {
     Ok(promise)
 }
 
+// File operations
+fn set_file(mut cx: FunctionContext) -> JsResult<JsPromise> {
+    let store = cx.argument::<BoxedStore>(0)?;
+    let path = cx.argument::<JsString>(1)?.value(&mut cx);
+    let buffer = cx.argument::<JsBuffer>(2)?;
+    
+    let channel = cx.channel();
+    let (deferred, promise) = cx.promise();
+    
+    let store_arc = Arc::clone(&store.store);
+    
+    // Get buffer data as bytes
+    let data = buffer.as_slice(&mut cx).to_vec();
+    
+    std::thread::spawn(move || {
+        let result = store_arc.set_file(&path, &data);
+        
+        deferred.settle_with(&channel, move |mut cx| {
+            match result {
+                Ok(_) => Ok(cx.undefined()),
+                Err(e) => cx.throw_error(format!("SetFile failed: {}", e))
+            }
+        });
+    });
+    
+    Ok(promise)
+}
+
+fn get_file(mut cx: FunctionContext) -> JsResult<JsPromise> {
+    let store = cx.argument::<BoxedStore>(0)?;
+    let path = cx.argument::<JsString>(1)?.value(&mut cx);
+    let channel = cx.channel();
+    let (deferred, promise) = cx.promise();
+    
+    let store_arc = Arc::clone(&store.store);
+    
+    std::thread::spawn(move || {
+        let result = store_arc.get_file(&path);
+        
+        deferred.settle_with(&channel, move |mut cx| {
+            match result {
+                Ok(data) => {
+                    let mut buffer = cx.buffer(data.len())?;
+                    let slice = buffer.as_mut_slice(&mut cx);
+                    slice.copy_from_slice(&data);
+                    Ok(buffer)
+                }
+                Err(e) => cx.throw_error(format!("GetFile failed: {}", e))
+            }
+        });
+    });
+    
+    Ok(promise)
+}
+
+fn delete_file(mut cx: FunctionContext) -> JsResult<JsPromise> {
+    let store = cx.argument::<BoxedStore>(0)?;
+    let path = cx.argument::<JsString>(1)?.value(&mut cx);
+    let channel = cx.channel();
+    let (deferred, promise) = cx.promise();
+    
+    let store_arc = Arc::clone(&store.store);
+    
+    std::thread::spawn(move || {
+        let result = store_arc.delete_file(&path);
+        
+        deferred.settle_with(&channel, move |mut cx| {
+            match result {
+                Ok(_) => Ok(cx.undefined()),
+                Err(e) => cx.throw_error(format!("DeleteFile failed: {}", e))
+            }
+        });
+    });
+    
+    Ok(promise)
+}
+
+// Search operation
+fn search(mut cx: FunctionContext) -> JsResult<JsPromise> {
+    let store = cx.argument::<BoxedStore>(0)?;
+    let pattern = cx.argument::<JsString>(1)?.value(&mut cx);
+    let filters_array = cx.argument::<JsArray>(2)?;
+    let limit = cx.argument::<JsNumber>(3)?.value(&mut cx) as usize;
+    
+    let channel = cx.channel();
+    let (deferred, promise) = cx.promise();
+    
+    // Parse filters from JS array
+    let mut filters = Vec::new();
+    for i in 0..filters_array.len(&mut cx) {
+        let filter_obj: Handle<JsObject> = filters_array.get(&mut cx, i)?;
+        
+        let field: Handle<JsString> = filter_obj.get(&mut cx, "field")?;
+        let op_str: Handle<JsString> = filter_obj.get(&mut cx, "op")?;
+        let value: Handle<JsString> = filter_obj.get(&mut cx, "value")?;
+        
+        let op = match op_str.value(&mut cx).as_str() {
+            "==" => store::FilterOp::Eq,
+            "!=" => store::FilterOp::Ne,
+            ">" => store::FilterOp::Gt,
+            ">=" => store::FilterOp::Gte,
+            "<" => store::FilterOp::Lt,
+            "<=" => store::FilterOp::Lte,
+            _ => store::FilterOp::Eq,
+        };
+        
+        filters.push(store::SearchFilter {
+            field: field.value(&mut cx),
+            op,
+            value: value.value(&mut cx),
+        });
+    }
+    
+    let store_arc = Arc::clone(&store.store);
+    
+    std::thread::spawn(move || {
+        let result = store_arc.search(&pattern, filters, limit);
+        
+        deferred.settle_with(&channel, move |mut cx| {
+            match result {
+                Ok(groups) => {
+                    let js_array = cx.empty_array();
+                    
+                    for (idx, (group_key, fields)) in groups.into_iter().enumerate() {
+                        let group_array = cx.empty_array();
+                        
+                        // Add all fields as [key, value] pairs
+                        let mut field_idx = 0;
+                        for (field_name, field_value) in fields {
+                            let pair = cx.empty_array();
+                            let full_key = format!("{}/{}", group_key, field_name);
+                            let js_key = cx.string(full_key);
+                            let js_value = cx.string(field_value);
+                            pair.set(&mut cx, 0, js_key)?;
+                            pair.set(&mut cx, 1, js_value)?;
+                            group_array.set(&mut cx, field_idx, pair)?;
+                            field_idx += 1;
+                        }
+                        
+                        js_array.set(&mut cx, idx as u32, group_array)?;
+                    }
+                    
+                    Ok(js_array)
+                }
+                Err(e) => cx.throw_error(format!("Search failed: {}", e))
+            }
+        });
+    });
+    
+    Ok(promise)
+}
+
 #[neon::main]
 fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("open", open)?;
@@ -368,6 +521,10 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("getRange", get_range)?;
     cx.export_function("getPatternEntries", get_pattern_entries)?;
     cx.export_function("getRangeEntries", get_range_entries)?;
+    cx.export_function("setFile", set_file)?;
+    cx.export_function("getFile", get_file)?;
+    cx.export_function("deleteFile", delete_file)?;
+    cx.export_function("search", search)?;
     
     Ok(())
 }

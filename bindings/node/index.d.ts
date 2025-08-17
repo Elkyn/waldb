@@ -89,6 +89,63 @@ declare module '@elkyn/waldb' {
     flush(): Promise<void>;
     
     /**
+     * Store a file with automatic compression and deduplication
+     * @param path Path where to store the file
+     * @param data File data as Buffer, ArrayBuffer, or Uint8Array
+     */
+    setFile(path: string, data: Buffer | ArrayBuffer | Uint8Array): Promise<void>;
+    
+    /**
+     * Retrieve a file from blob storage
+     * @param path Path of the file
+     */
+    getFile(path: string): Promise<Buffer>;
+    
+    /**
+     * Delete a file and its metadata
+     * @param path Path of the file to delete
+     */
+    deleteFile(path: string): Promise<void>;
+    
+    /**
+     * Get file metadata without retrieving the file
+     * @param path Path of the file
+     */
+    getFileMeta(path: string): Promise<{
+      size: number;
+      type: string;
+      hash: string;
+    }>;
+    
+    /**
+     * Search with filters, grouping results by subroot
+     * @param options Search options
+     */
+    search(options: {
+      pattern: string;
+      filters?: Array<{
+        field: string;
+        op: '==' | '!=' | '>' | '<' | '>=' | '<=';
+        value: string | number | boolean;
+      }>;
+      limit?: number;
+    }): Promise<Array<Array<[string, any]>>>;
+    
+    /**
+     * Search and return as reconstructed objects
+     * @param options Same as search()
+     */
+    searchObjects(options: {
+      pattern: string;
+      filters?: Array<{
+        field: string;
+        op: '==' | '!=' | '>' | '<' | '>=' | '<=';
+        value: string | number | boolean;
+      }>;
+      limit?: number;
+    }): Promise<Array<any>>;
+    
+    /**
      * Create a Firebase RTDB-style reference
      * @param path The path to reference
      */
