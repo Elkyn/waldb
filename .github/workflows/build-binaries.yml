@@ -14,22 +14,18 @@ jobs:
           # Linux x64
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact: libwaldb_node.so
             
-          # macOS x64
+          # macOS x64 (runs on ARM64 but can build for x64)
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact: libwaldb_node.dylib
             
           # macOS ARM64
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact: libwaldb_node.dylib
             
           # Windows x64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: waldb_node.dll
 
     runs-on: ${{ matrix.os }}
     
@@ -41,16 +37,38 @@ jobs:
         with:
           targets: ${{ matrix.target }}
           
-      - name: Build
+      - name: Build native module
         working-directory: ./bindings/node
         run: |
-          cargo build --release --target ${{ matrix.target }}
+          npm install --ignore-scripts
+          npm run build-release
+        env:
+          CARGO_BUILD_TARGET: ${{ matrix.target }}
           
-      - name: Copy artifact
+      - name: Find and rename binary
         shell: bash
         working-directory: ./bindings/node
         run: |
-          cp ../../target/${{ matrix.target }}/release/${{ matrix.artifact }} index.node
+          # Find the built library
+          if [ -f "index.node" ]; then
+            echo "Found index.node in current directory"
+          elif [ -f "../../target/${{ matrix.target }}/release/libwaldb_node.so" ]; then
+            cp "../../target/${{ matrix.target }}/release/libwaldb_node.so" index.node
+          elif [ -f "../../target/${{ matrix.target }}/release/libwaldb_node.dylib" ]; then
+            cp "../../target/${{ matrix.target }}/release/libwaldb_node.dylib" index.node
+          elif [ -f "../../target/${{ matrix.target }}/release/waldb_node.dll" ]; then
+            cp "../../target/${{ matrix.target }}/release/waldb_node.dll" index.node
+          elif [ -f "../../target/release/libwaldb_node.so" ]; then
+            cp "../../target/release/libwaldb_node.so" index.node
+          elif [ -f "../../target/release/libwaldb_node.dylib" ]; then
+            cp "../../target/release/libwaldb_node.dylib" index.node
+          elif [ -f "../../target/release/waldb_node.dll" ]; then
+            cp "../../target/release/waldb_node.dll" index.node
+          else
+            echo "Could not find built library"
+            find ../../target -name "*.so" -o -name "*.dylib" -o -name "*.dll" 2>/dev/null || true
+            exit 1
+          fi
           
       - name: Package binary
         shell: bash
