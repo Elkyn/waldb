@@ -18,11 +18,12 @@
     "build": "cargo-cp-artifact -ac waldb-node index.node -- cargo build --message-format=json-render-diagnostics",
     "build-debug": "npm run build --",
     "build-release": "npm run build -- --release",
-    "test": "npm run test-fundamentals && npm run test-types && npm run test-complete && npm run test-vector",
+    "test": "npm run test-fundamentals && npm run test-types && npm run test-complete && npm run test-vector && npm run test-files",
     "test-fundamentals": "node test-fundamentals.js",
     "test-types": "node test-types.js",
     "test-complete": "node test-complete.js",
-    "test-vector": "node test-vector-search.js"
+    "test-vector": "node test-vector-search.js",
+    "test-files": "node test-files.js"
   },
   "keywords": [
     "database",

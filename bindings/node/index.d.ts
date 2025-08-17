@@ -146,6 +146,35 @@ declare module '@elkyn/waldb' {
     }): Promise<Array<any>>;
     
     /**
+     * Store a file with automatic deduplication and compression
+     * @param path Path to store the file
+     * @param data File data as Buffer, ArrayBuffer, or Uint8Array
+     */
+    setFile(path: string, data: Buffer | ArrayBuffer | Uint8Array): Promise<void>;
+    
+    /**
+     * Retrieve a file from blob storage
+     * @param path Path of the file
+     */
+    getFile(path: string): Promise<Buffer>;
+    
+    /**
+     * Delete a file and its metadata
+     * @param path Path of the file to delete
+     */
+    deleteFile(path: string): Promise<void>;
+    
+    /**
+     * Get file metadata without retrieving the file content
+     * @param path Path of the file
+     */
+    getFileMeta(path: string): Promise<{
+      size?: number;
+      type?: string;
+      hash?: string;
+    }>;
+    
+    /**
      * Set a vector embedding
      * @param path Path to store the vector
      * @param vector Array of numbers representing the vector
