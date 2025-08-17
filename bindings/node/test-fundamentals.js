@@ -391,7 +391,7 @@ async function runTests() {
 
     // Clean up
     console.log('\n✅ All fundamental behavior tests passed!');
-    await cleanupTestDir(testDir, db);
+    await cleanupTestDir(testDir);
     process.exit(0);
 }
 

@@ -324,7 +324,7 @@ await test('Strings starting with type prefixes', async () => {
 
 // Clean up
 console.log('\n✅ All type preservation tests passed!');
-await cleanupTestDir(testDir, db);
+await cleanupTestDir(testDir);
 process.exit(0);
 }
 
