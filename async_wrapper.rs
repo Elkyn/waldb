@@ -183,6 +183,17 @@ impl AsyncStore {
         }).await
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
     }
+    
+    /// Set many key-value pairs atomically with optional subtree replacement
+    pub async fn set_many(&self, entries: Vec<(String, String)>, replace_subtree_at: Option<&str>) -> io::Result<()> {
+        let store = self.inner.clone();
+        let replace_at = replace_subtree_at.map(|s| s.to_string());
+        
+        task::spawn_blocking(move || {
+            store.set_many(entries, replace_at.as_deref())
+        }).await
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
+    }
 }
 
 #[cfg(test)]

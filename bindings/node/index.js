@@ -1,173 +1,247 @@
-// WalDB Node.js API
-// High-level JavaScript interface that provides Firebase RTDB-like API
+/**
+ * WalDB - Async-first Node.js bindings
+ * High-performance write-ahead log database with Firebase-like tree semantics
+ */
 
 const native = require('./index.node');
 
-/**
- * WalDB Database class providing Firebase-like API
- */
 class WalDB {
-    constructor(storePath) {
-        this._path = storePath;
-        // Validate store can be opened
-        native.open(storePath);
+    constructor(store) {
+        this._store = store;  // Native store handle
     }
-
+    
     /**
-     * Open a WalDB database
+     * Open a database (async)
      * @param {string} path - Path to the database directory
-     * @returns {WalDB} Database instance
+     * @returns {Promise<WalDB>} Database instance
      */
-    static open(path) {
-        return new WalDB(path);
+    static async open(path) {
+        // Real async from Rust - returns a boxed store
+        const store = await native.open(path);
+        return new WalDB(store);
     }
-
+    
     /**
-     * Set a value at the given path
+     * Set a value at the given path (async)
      * @param {string} key - The path to set
-     * @param {any} value - The value to set (will be JSON stringified if object)
+     * @param {any} value - The value to set (objects will be flattened)
      * @param {boolean} [force=false] - Whether to force overwrite parent nodes
      */
-    set(key, value, force = false) {
-        const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
-        native.set(this._path, key, stringValue, force);
+    async set(key, value, force = false) {
+        if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+            // Flatten object into multiple key-value pairs
+            const flattened = this._flattenObject(key, value);
+            const replaceAt = key === '' ? null : key;
+            return native.setMany(this._store, flattened, replaceAt);
+        } else {
+            // Encode primitives and arrays with type prefixes
+            const encodedValue = this._encodeValue(value);
+            return native.set(this._store, key, encodedValue, force);
+        }
     }
-
+    
     /**
-     * Get a value or subtree at the given path
+     * Get a value or subtree at the given path (async)
      * @param {string} key - The path to get
-     * @returns {any} The value or null if not found
+     * @returns {Promise<any>} The value or null if not found
      */
-    get(key) {
-        return native.get(this._path, key);
+    async get(key) {
+        const result = await native.get(this._store, key);
+        
+        // If result is a string, try to decode it
+        if (typeof result === 'string') {
+            // Check if it's JSON (reconstructed object from Rust)
+            if (result.startsWith('{') || result.startsWith('[')) {
+                try {
+                    const parsed = JSON.parse(result);
+                    return this._decodeObject(parsed);
+                } catch(e) {
+                    // Not JSON, decode as single value
+                    return WalDB._decodeValue(result);
+                }
+            }
+            return WalDB._decodeValue(result);
+        }
+        
+        return result;
     }
-
+    
     /**
-     * Delete a path and all its children
+     * Delete a path and all its children (async)
      * @param {string} key - The path to delete
      */
-    delete(key) {
-        native.delete(this._path, key);
+    async delete(key) {
+        return native.delete(this._store, key);
     }
-
+    
     /**
-     * Check if a path exists
-     * @param {string} key - The path to check
-     * @returns {boolean} True if the path exists
+     * Flush memtable to disk (async)
      */
-    exists(key) {
-        const value = this.get(key);
-        return value !== null && value !== undefined;
+    async flush() {
+        return native.flush(this._store);
     }
-
+    
     /**
-     * Get all values matching a pattern
+     * Get all values matching a pattern (async)
      * @param {string} pattern - Pattern with * and ? wildcards
-     * @returns {Object} Object with matching key-value pairs
+     * @returns {Promise<Object>} Object with matching key-value pairs
      */
-    getPattern(pattern) {
-        return native.getPattern(this._path, pattern);
+    async getPattern(pattern) {
+        const results = await native.getPattern(this._store, pattern);
+        if (results && typeof results === 'object') {
+            return this._decodeObject(results);
+        }
+        return results;
     }
-
+    
     /**
-     * Get all values in a range
+     * Get all values in a range (async)
      * @param {string} start - Start key (inclusive)
      * @param {string} end - End key (exclusive)
-     * @returns {Object} Object with matching key-value pairs
+     * @returns {Promise<Object>} Object with matching key-value pairs
      */
-    getRange(start, end) {
-        return native.getRange(this._path, start, end);
+    async getRange(start, end) {
+        const results = await native.getRange(this._store, start, end);
+        if (results && typeof results === 'object') {
+            return this._decodeObject(results);
+        }
+        return results;
     }
-
+    
     /**
-     * List all keys with a given prefix
-     * @param {string} prefix - The prefix to match
-     * @returns {string[]} Array of matching keys
+     * Check if a key exists (async)
+     * @param {string} key - The path to check
+     * @returns {Promise<boolean>} True if the key exists
      */
-    listKeys(prefix) {
-        const range = this.getRange(prefix, prefix + '\uffff');
-        return Object.keys(range);
+    async exists(key) {
+        const value = await this.get(key);
+        return value !== null && value !== undefined;
     }
-
+    
     /**
-     * Flush pending writes to disk
+     * Create a reference to a path (Firebase-style API)
+     * @param {string} path - The path to reference
+     * @returns {Reference} A reference object
      */
-    flush() {
-        native.flush(this._path);
-    }
-
-    /**
-     * Firebase RTDB-style reference API
-     * @param {string} path - Path to create reference for
-     * @returns {Reference} Reference object
-     */
-    ref(path = '') {
+    ref(path) {
         return new Reference(this, path);
+    }
+    
+    
+    // Private helper methods
+    
+    _flattenObject(basePath, obj, result = {}) {
+        for (const [key, value] of Object.entries(obj)) {
+            const fullPath = basePath ? `${basePath}/${key}` : key;
+            
+            if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+                this._flattenObject(fullPath, value, result);
+            } else {
+                result[fullPath] = this._encodeValue(value);
+            }
+        }
+        return result;
+    }
+    
+    _encodeValue(value) {
+        if (value === null) {
+            return 'z:null';
+        } else if (typeof value === 'string') {
+            return 's:' + value;
+        } else if (typeof value === 'number') {
+            return 'n:' + value;
+        } else if (typeof value === 'boolean') {
+            return 'b:' + value;
+        } else if (Array.isArray(value)) {
+            return 'a:' + JSON.stringify(value);
+        } else if (typeof value === 'object') {
+            return 's:' + JSON.stringify(value);
+        }
+    }
+    
+    static _decodeValue(encoded) {
+        if (!encoded || typeof encoded !== 'string') {
+            return encoded;
+        }
+        
+        const colonIndex = encoded.indexOf(':');
+        if (colonIndex === -1 || colonIndex === 0) {
+            return encoded;
+        }
+        
+        const type = encoded[0];
+        const value = encoded.substring(2);
+        
+        switch (type) {
+            case 's': return value;
+            case 'n': return Number(value);
+            case 'b': return value === 'true';
+            case 'a':
+                try {
+                    return JSON.parse(value);
+                } catch {
+                    return value;
+                }
+            case 'z': return null;
+            default: return encoded;
+        }
+    }
+    
+    _decodeObject(obj) {
+        if (Array.isArray(obj)) {
+            return obj.map(item => 
+                typeof item === 'object' && item !== null ? this._decodeObject(item) : WalDB._decodeValue(item)
+            );
+        } else if (typeof obj === 'object' && obj !== null) {
+            const decoded = {};
+            for (const [key, value] of Object.entries(obj)) {
+                if (typeof value === 'object' && value !== null) {
+                    decoded[key] = this._decodeObject(value);
+                } else {
+                    decoded[key] = WalDB._decodeValue(value);
+                }
+            }
+            return decoded;
+        }
+        return obj;
     }
 }
 
 /**
- * Firebase RTDB-style reference class
+ * Firebase-style reference API
  */
 class Reference {
     constructor(db, path) {
         this._db = db;
         this._path = path;
     }
-
-    /**
-     * Get child reference
-     * @param {string} childPath - Child path
-     * @returns {Reference} Child reference
-     */
-    child(childPath) {
-        const fullPath = this._path ? `${this._path}/${childPath}` : childPath;
-        return new Reference(this._db, fullPath);
+    
+    async set(value) {
+        return this._db.set(this._path, value);
     }
-
-    /**
-     * Set value at this reference
-     * @param {any} value - Value to set
-     * @param {boolean} [force=false] - Whether to force overwrite
-     */
-    set(value, force = false) {
-        this._db.set(this._path, value, force);
-    }
-
-    /**
-     * Get value at this reference
-     * @returns {any} The value
-     */
-    get() {
+    
+    async get() {
         return this._db.get(this._path);
     }
-
-    /**
-     * Remove value at this reference
-     */
-    remove() {
-        this._db.delete(this._path);
+    
+    async remove() {
+        return this._db.delete(this._path);
     }
-
-    /**
-     * Check if this reference exists
-     * @returns {boolean} True if exists
-     */
-    exists() {
-        return this._db.exists(this._path);
+    
+    child(path) {
+        const newPath = this._path ? `${this._path}/${path}` : path;
+        return new Reference(this._db, newPath);
     }
-
-    /**
-     * Get the path of this reference
-     * @returns {string} The path
-     */
-    toString() {
-        return this._path || '/';
+    
+    parent() {
+        const idx = this._path.lastIndexOf('/');
+        if (idx > 0) {
+            return new Reference(this._db, this._path.substring(0, idx));
+        }
+        return new Reference(this._db, '');
     }
 }
 
-// Export both the class and a convenience function
 module.exports = WalDB;
-module.exports.open = (path) => WalDB.open(path);
 module.exports.WalDB = WalDB;
 module.exports.Reference = Reference;

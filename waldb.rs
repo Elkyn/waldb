@@ -210,7 +210,8 @@ impl Store {
     pub fn set(&self, path: &str, value: &str, replace_subtree: bool) -> io::Result<()> {
         // Check parent isn't a scalar (tree semantics)
         if let Some(parent) = parent_path(path) {
-            if self.get(&parent)?.is_some() {
+            // Check if parent exists as an actual scalar value (not reconstructed object)
+            if self.has_scalar_value(&parent)? {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "Cannot write under scalar parent"
@@ -263,25 +264,65 @@ impl Store {
     
     pub fn get(&self, path: &str) -> io::Result<Option<String>> {
         let inner = self.inner.read().map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Lock poisoned: {}", e)))?;
+        self.get_internal(&inner, path)
+    }
+    
+    fn has_scalar_value(&self, path: &str) -> io::Result<bool> {
+        let inner = self.inner.read().map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Lock poisoned: {}", e)))?;
         
-        // Check if this is a subtree query
-        if path.ends_with('/') {
-            return self.get_subtree(&inner, path);
-        }
-        
-        // Check memtable
+        // Check memtable for exact scalar value
         if let Some(mv) = inner.memtable.get(path) {
-            match mv {
-                MemValue::Scalar(v, seq) if !self.covered_by_subtomb(&inner, path, *seq) => {
-                    return Ok(Some(v.clone()));
+            if let MemValue::Scalar(_, seq) = mv {
+                if !self.covered_by_subtomb(&inner, path, *seq) {
+                    return Ok(true);
                 }
-                _ => return Ok(None),
             }
         }
         
-        // Check segments
-        let mut result: Option<(Option<String>, u64)> = None;
+        // Check segments for exact scalar value
+        for seg in inner.segments_l0.iter()
+            .chain(inner.segments_l1.iter())
+            .chain(inner.segments_l2.iter())
+        {
+            if let Some(bloom) = &seg.bloom {
+                if !bloom.might_contain(path) {
+                    continue;
+                }
+            }
+            
+            if let Some((Some(_), seq)) = self.get_from_segment(seg, path)? {
+                if !self.covered_by_subtomb(&inner, path, seq) {
+                    return Ok(true);
+                }
+            }
+        }
         
+        Ok(false)
+    }
+    
+    fn get_internal(&self, inner: &std::sync::RwLockReadGuard<StoreInner>, path: &str) -> io::Result<Option<String>> {
+        // Check if this is a subtree query
+        if path.ends_with('/') {
+            return self.get_subtree(inner, path);
+        }
+        
+        // First check for exact key match (both memtable and segments)
+        let mut exact_match: Option<(Option<String>, u64)> = None;
+        
+        // Check memtable for exact key
+        if let Some(mv) = inner.memtable.get(path) {
+            match mv {
+                MemValue::Scalar(v, seq) if !self.covered_by_subtomb(inner, path, *seq) => {
+                    exact_match = Some((Some(v.clone()), *seq));
+                }
+                MemValue::PointTomb(seq) => {
+                    exact_match = Some((None, *seq)); // Tombstone
+                }
+                _ => {}
+            }
+        }
+        
+        // Check segments for exact match
         for seg in inner.segments_l0.iter()
             .chain(inner.segments_l1.iter())
             .chain(inner.segments_l2.iter())
@@ -293,20 +334,97 @@ impl Store {
             }
             
             if let Some((val_opt, seq)) = self.get_from_segment(seg, path)? {
-                if !self.covered_by_subtomb(&inner, path, seq) {
-                    if result.is_none() || seq > result.as_ref().expect("Result checked to be Some").1 {
-                        result = Some((val_opt, seq));
+                if !self.covered_by_subtomb(inner, path, seq) {
+                    if exact_match.is_none() || seq > exact_match.as_ref().expect("checked").1 {
+                        exact_match = Some((val_opt, seq));
                     }
                 }
             }
         }
         
-        // Handle the result - None in value means tombstone
-        match result {
-            Some((Some(v), _)) => Ok(Some(v)),
-            Some((None, _)) => Ok(None), // Tombstone
-            None => Ok(None), // Not found
+        // If we have an exact match, check what it is
+        if let Some((val_opt, exact_seq)) = exact_match {
+            // If it's a scalar value, return it
+            if val_opt.is_some() {
+                return Ok(val_opt);
+            }
+            
+            // It's a tombstone - check if there are newer children
+            // If children were added after the tombstone, reconstruct the object
+            let prefix = if path.is_empty() { 
+                String::new() 
+            } else { 
+                format!("{}/", path) 
+            };
+            
+            // Check for children newer than the tombstone
+            let has_newer_children = inner.memtable.iter()
+                .any(|(k, v)| {
+                    if k.starts_with(&prefix) {
+                        if let MemValue::Scalar(_, seq) = v {
+                            return *seq > exact_seq && !self.covered_by_subtomb(inner, k, *seq);
+                        }
+                    }
+                    false
+                });
+            
+            if has_newer_children || self.has_newer_children_in_segments(inner, &prefix, exact_seq)? {
+                // Reconstruct from children instead of returning tombstone
+                return self.get_subtree(inner, &prefix);
+            }
+            
+            // No newer children, return the tombstone (null)
+            return Ok(None);
         }
+        
+        // No exact match found - check if there are children (Firebase behavior)
+        // If path has children, reconstruct as JSON object
+        let prefix = if path.is_empty() { 
+            String::new() 
+        } else { 
+            format!("{}/", path) 
+        };
+        
+        // Check if any keys start with this prefix
+        let has_children = inner.memtable.keys()
+            .any(|k| k.starts_with(&prefix) && !self.covered_by_subtomb(inner, k, u64::MAX));
+        
+        if has_children || self.has_children_in_segments(inner, &prefix)? {
+            // Reconstruct the object from children
+            return self.get_subtree(inner, &prefix);
+        }
+        
+        Ok(None)
+    }
+    
+    fn has_children_in_segments(&self, inner: &std::sync::RwLockReadGuard<StoreInner>, prefix: &str) -> io::Result<bool> {
+        for seg in inner.segments_l0.iter()
+            .chain(inner.segments_l1.iter())
+            .chain(inner.segments_l2.iter())
+        {
+            // Quick check: if any index key starts with prefix, we have children
+            for (key, _) in &seg.index {
+                if key.starts_with(prefix) {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+    
+    fn has_newer_children_in_segments(&self, inner: &std::sync::RwLockReadGuard<StoreInner>, prefix: &str, min_seq: u64) -> io::Result<bool> {
+        for seg in inner.segments_l0.iter()
+            .chain(inner.segments_l1.iter())
+            .chain(inner.segments_l2.iter())
+        {
+            // Use scan_segment to check for newer children
+            for (key, _, seq) in self.scan_segment(seg, prefix, &format!("{}~", prefix))? {
+                if seq > min_seq && !self.covered_by_subtomb(inner, &key, seq) {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
     }
     
     fn get_subtree(&self, inner: &std::sync::RwLockReadGuard<StoreInner>, prefix: &str) -> io::Result<Option<String>> {
@@ -622,6 +740,120 @@ impl Store {
         })?;
         
         inner.memtable.insert(path.to_string(), MemValue::PointTomb(seq));
+        Ok(())
+    }
+    
+    /// Set multiple key-value pairs atomically, optionally replacing a subtree first
+    pub fn set_many(&self, entries: Vec<(String, String)>, replace_subtree_at: Option<&str>) -> io::Result<()> {
+        
+        if entries.is_empty() {
+            return Ok(());
+        }
+        
+        let mut inner = self.inner.write().map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Lock poisoned: {}", e)))?;
+        
+        // Replace subtree if specified
+        if let Some(base_path) = replace_subtree_at {
+            // Check if we need a point tombstone (only if base path has a value or children)
+            let needs_point_tomb = {
+                // Check for direct value
+                let has_memtable_value = if let Some(mv) = inner.memtable.get(base_path) {
+                    matches!(mv, MemValue::Scalar(_, _))
+                } else {
+                    false
+                };
+                
+                if has_memtable_value {
+                    true
+                } else {
+                    // Check in segments
+                    let has_value_in_segments = inner.segments_l0.iter()
+                        .chain(inner.segments_l1.iter())
+                        .chain(inner.segments_l2.iter())
+                        .any(|seg| {
+                            seg.index.iter().any(|(k, _)| k == base_path)
+                        });
+                    
+                    if has_value_in_segments {
+                        true
+                    } else {
+                        // Check for children
+                        let prefix = format!("{}/", base_path);
+                        let has_children_mem = inner.memtable.keys().any(|k| k.starts_with(&prefix));
+                        let has_children_seg = inner.segments_l0.iter()
+                            .chain(inner.segments_l1.iter())
+                            .chain(inner.segments_l2.iter())
+                            .any(|seg| {
+                                seg.index.iter().any(|(k, _)| k.starts_with(&prefix))
+                            });
+                        has_children_mem || has_children_seg
+                    }
+                }
+            };
+            
+            // Only add point tombstone if there's something to delete
+            if needs_point_tomb {
+                inner.seq += 1;
+                let point_tomb_seq = inner.seq;
+                
+                self.wal.append(&WALEntry {
+                    seq: point_tomb_seq,
+                    kind: RT_DEL_POINT,
+                    key: base_path.to_string(),
+                    value: None,
+                })?;
+                
+                inner.memtable.insert(base_path.to_string(), MemValue::PointTomb(point_tomb_seq));
+            }
+            
+            // Always add subtree deletion to subtombs (for any children)
+            inner.seq += 1;
+            let subtomb_seq = inner.seq;
+            
+            self.wal.append(&WALEntry {
+                seq: subtomb_seq,
+                kind: RT_DEL_SUB,
+                key: base_path.to_string(),
+                value: None,
+            })?;
+            
+            inner.subtombs.insert(base_path.to_string(), subtomb_seq);
+        }
+        
+        // Store all entries with same sequence number for atomicity
+        inner.seq += 1;
+        let batch_seq = inner.seq;
+        
+        for (key, value) in &entries {
+            // Check parent isn't a scalar (tree semantics)
+            if let Some(parent) = parent_path(key) {
+                // Check if parent exists as a scalar value
+                if let Some(mv) = inner.memtable.get(&parent) {
+                    if matches!(mv, MemValue::Scalar(_, _)) {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "Cannot write under scalar parent"
+                        ));
+                    }
+                }
+            }
+            
+            self.wal.append(&WALEntry {
+                seq: batch_seq,
+                kind: RT_SET,
+                key: key.to_string(),
+                value: Some(value.to_string()),
+            })?;
+            
+            inner.memtable.insert(key.to_string(), MemValue::Scalar(value.to_string(), batch_seq));
+            inner.memtable_size += key.len() + value.len() + 32; // Estimate
+        }
+        
+        // Flush memtable if it gets too large
+        if inner.memtable_size > MEMTABLE_THRESHOLD {
+            self.flush_memtable_locked(&mut inner)?;
+        }
+        
         Ok(())
     }
     
@@ -1972,4 +2204,287 @@ fn main() -> io::Result<()> {
     
     println!("Goodbye!");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+    
+    #[test]
+    fn test_object_reconstruction_after_flush() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        
+        // Set individual properties (simulating flattened object)
+        store.set("obj/a", "n:1", false).unwrap();
+        store.set("obj/b", "n:2", false).unwrap();
+        store.set("obj/c/d", "n:3", false).unwrap();
+        
+        // Before flush - should reconstruct
+        let result = store.get("obj").unwrap();
+        assert!(result.is_some(), "Should reconstruct object before flush");
+        
+        // Flush to segments
+        store.flush().unwrap();
+        
+        // After flush - should still reconstruct
+        let result2 = store.get("obj").unwrap();
+        assert!(result2.is_some(), "Should reconstruct object after flush");
+        
+        // Reopen store
+        let store2 = Store::open(dir.path()).unwrap();
+        let result3 = store2.get("obj").unwrap();
+        assert!(result3.is_some(), "Should reconstruct object after reopen");
+    }
+    
+    #[test]
+    fn test_smart_tombstone_scenarios() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        
+        // Scenario 1: Set object at non-existent path (no tombstone should be created)
+        store.set_many(vec![
+            ("new/a".to_string(), "1".to_string()),
+            ("new/b".to_string(), "2".to_string()),
+        ], Some("new")).unwrap();
+        
+        let result = store.get("new").unwrap();
+        assert!(result.is_some(), "Should reconstruct new object");
+        
+        store.flush().unwrap();
+        let result2 = store.get("new").unwrap();
+        assert!(result2.is_some(), "Should reconstruct after flush");
+        
+        // Scenario 2: Replace existing scalar with object
+        store.set("scalar", "oldvalue", false).unwrap();
+        store.flush().unwrap();
+        
+        store.set_many(vec![
+            ("scalar/a".to_string(), "1".to_string()),
+            ("scalar/b".to_string(), "2".to_string()),
+        ], Some("scalar")).unwrap();
+        
+        // Should have replaced the scalar
+        assert!(store.get("scalar").unwrap().is_some());
+        assert!(store.get("scalar/a").unwrap().is_some());
+        
+        store.flush().unwrap();
+        let store2 = Store::open(dir.path()).unwrap();
+        assert!(store2.get("scalar").unwrap().is_some(), "Should reconstruct after reopen");
+        assert!(store2.get("scalar/a").unwrap().is_some());
+        
+        // Scenario 3: Replace existing object with new object
+        store.set_many(vec![
+            ("existing/old1".to_string(), "v1".to_string()),
+            ("existing/old2".to_string(), "v2".to_string()),
+        ], None).unwrap();
+        store.flush().unwrap();
+        
+        store.set_many(vec![
+            ("existing/new1".to_string(), "n1".to_string()),
+            ("existing/new2".to_string(), "n2".to_string()),
+        ], Some("existing")).unwrap();
+        
+        // Old keys should be gone
+        assert!(store.get("existing/old1").unwrap().is_none());
+        assert!(store.get("existing/old2").unwrap().is_none());
+        // New keys should exist
+        assert!(store.get("existing/new1").unwrap().is_some());
+        assert!(store.get("existing/new2").unwrap().is_some());
+        
+        store.flush().unwrap();
+        let store3 = Store::open(dir.path()).unwrap();
+        assert!(store3.get("existing").unwrap().is_some(), "Should reconstruct");
+        assert!(store3.get("existing/old1").unwrap().is_none());
+        assert!(store3.get("existing/new1").unwrap().is_some());
+    }
+    
+    #[test]
+    fn test_nested_object_scenarios() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        
+        // Complex nested structure
+        store.set_many(vec![
+            ("root/users/alice/name".to_string(), "Alice".to_string()),
+            ("root/users/alice/age".to_string(), "30".to_string()),
+            ("root/users/bob/name".to_string(), "Bob".to_string()),
+            ("root/users/bob/age".to_string(), "25".to_string()),
+            ("root/settings/theme".to_string(), "dark".to_string()),
+        ], Some("root")).unwrap();
+        
+        // Should reconstruct at all levels
+        assert!(store.get("root").unwrap().is_some());
+        assert!(store.get("root/users").unwrap().is_some());
+        assert!(store.get("root/users/alice").unwrap().is_some());
+        
+        store.flush().unwrap();
+        
+        // Replace a subtree
+        store.set_many(vec![
+            ("root/users/alice/name".to_string(), "Alicia".to_string()),
+            ("root/users/alice/email".to_string(), "alice@example.com".to_string()),
+        ], Some("root/users/alice")).unwrap();
+        
+        // Age should be gone, email should exist
+        assert!(store.get("root/users/alice/age").unwrap().is_none());
+        assert!(store.get("root/users/alice/email").unwrap().is_some());
+        // Bob should be unaffected
+        assert!(store.get("root/users/bob/name").unwrap().is_some());
+        
+        store.flush().unwrap();
+        let store2 = Store::open(dir.path()).unwrap();
+        
+        // Everything should reconstruct properly
+        assert!(store2.get("root").unwrap().is_some());
+        assert!(store2.get("root/users/alice").unwrap().is_some());
+        assert!(store2.get("root/users/alice/email").unwrap().is_some());
+        assert!(store2.get("root/users/alice/age").unwrap().is_none());
+    }
+    
+    #[test]
+    fn test_empty_object_edge_cases() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        
+        // Set then delete all children - parent should not exist
+        store.set_many(vec![
+            ("temp/a".to_string(), "1".to_string()),
+            ("temp/b".to_string(), "2".to_string()),
+        ], Some("temp")).unwrap();
+        
+        store.delete("temp/a").unwrap();
+        store.delete("temp/b").unwrap();
+        
+        assert!(store.get("temp").unwrap().is_none(), "Empty object should not exist");
+        
+        store.flush().unwrap();
+        assert!(store.get("temp").unwrap().is_none(), "Empty object should not exist after flush");
+    }
+    
+    #[test]
+    #[ignore] // This test requires special setup
+    fn test_all_layers_reconstruction() {
+        use std::sync::Arc;
+        use std::path::PathBuf;
+        
+        // Test setup
+        let dir = tempdir().unwrap();
+        let path = dir.path();
+        
+        println!("\n=== Testing object reconstruction across all layers ===\n");
+        
+        // Test 1: Core Store layer
+        println!("1. Testing Core Store layer:");
+        {
+            let store = Store::open(path).unwrap();
+            
+            // Simulate what JS does: setMany with replaceAt for new object
+            store.set_many(vec![
+                ("obj/a".to_string(), "n:1".to_string()),
+                ("obj/b".to_string(), "n:2".to_string()),
+            ], Some("obj")).unwrap();
+            
+            let result_before = store.get("obj").unwrap();
+            println!("  Core before flush: {:?}", result_before);
+            assert!(result_before.is_some(), "Core should reconstruct before flush");
+            
+            store.flush().unwrap();
+            
+            let result_after = store.get("obj").unwrap();
+            println!("  Core after flush: {:?}", result_after);
+            assert!(result_after.is_some(), "Core should reconstruct after flush");
+        }
+        
+        // Clean directory for next test
+        std::fs::remove_dir_all(path).unwrap();
+        std::fs::create_dir_all(path).unwrap();
+        
+        // Test 2: Async wrapper layer
+        println!("\n2. Testing Async wrapper layer:");
+        {
+            // Import async runtime inline
+            use std::sync::Arc;
+            
+            // Create a tokio runtime for testing
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            
+            runtime.block_on(async {
+                // Include the async wrapper module
+                mod async_store {
+                    include!("async_wrapper.rs");
+                }
+                use async_store::AsyncStore;
+                
+                let store = AsyncStore::open(path).await.unwrap();
+                
+                // Same operation through async layer
+                store.set_many(vec![
+                    ("obj/a".to_string(), "n:1".to_string()),
+                    ("obj/b".to_string(), "n:2".to_string()),
+                ], Some("obj")).await.unwrap();
+                
+                let result_before = store.get("obj").await.unwrap();
+                println!("  Async before flush: {:?}", result_before);
+                assert!(result_before.is_some(), "Async should reconstruct before flush");
+                
+                store.flush().await.unwrap();
+                
+                let result_after = store.get("obj").await.unwrap();
+                println!("  Async after flush: {:?}", result_after);
+                assert!(result_after.is_some(), "Async should reconstruct after flush");
+            });
+        }
+        
+        // Clean directory for next test
+        std::fs::remove_dir_all(path).unwrap();
+        std::fs::create_dir_all(path).unwrap();
+        
+        // Test 3: What the Node binding does (simulated)
+        println!("\n3. Testing Node binding simulation:");
+        {
+            // This simulates exactly what the Node.js binding does
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            
+            runtime.block_on(async {
+                mod async_store {
+                    include!("../../../async_wrapper.rs");
+                }
+                use async_store::AsyncStore;
+                
+                let store = AsyncStore::open(path).await.unwrap();
+                
+                // Node.js passes flattened entries with type prefixes
+                let mut entries = std::collections::HashMap::new();
+                entries.insert("obj/a".to_string(), "n:1".to_string());
+                entries.insert("obj/b".to_string(), "n:2".to_string());
+                
+                // Convert to Vec like the binding does
+                let entries_vec: Vec<(String, String)> = entries.into_iter().collect();
+                
+                // Call with replaceAt like JS does
+                store.set_many(entries_vec, Some("obj")).await.unwrap();
+                
+                let result_before = store.get("obj").await.unwrap();
+                println!("  Binding simulation before flush: {:?}", result_before);
+                assert!(result_before.is_some(), "Binding sim should reconstruct before flush");
+                
+                store.flush().await.unwrap();
+                
+                let result_after = store.get("obj").await.unwrap();
+                println!("  Binding simulation after flush: {:?}", result_after);
+                assert!(result_after.is_some(), "Binding sim should reconstruct after flush");
+                
+                // Also test reopening (like Node does)
+                drop(store);
+                let store2 = AsyncStore::open(path).await.unwrap();
+                let result_reopen = store2.get("obj").await.unwrap();
+                println!("  Binding simulation after reopen: {:?}", result_reopen);
+                assert!(result_reopen.is_some(), "Binding sim should reconstruct after reopen");
+            });
+        }
+        
+        println!("\n✅ All layers passed!");
+    }
 }

@@ -127,7 +127,10 @@ fn test_scalar_to_tree_conversion() {
     store.delete("node").unwrap();
     store.set("node/child", "value", false).unwrap();
     
-    assert_eq!(store.get("node").unwrap(), None);
+    // After deleting and setting a child, getting the parent reconstructs an object
+    let node_value = store.get("node").unwrap();
+    assert!(node_value.is_some()); // Should reconstruct as JSON object
+    assert!(node_value.unwrap().contains("\"child\":\"value\""));
     assert_eq!(store.get("node/child").unwrap(), Some("value".to_string()));
     
     cleanup(&dir);
@@ -691,6 +694,128 @@ fn test_tombstone_behavior() {
     cleanup(&dir);
 }
 
+// ==================== BATCH OPERATIONS ====================
+
+fn test_set_many_basic() {
+    let dir = test_dir("set_many_basic");
+    let store = Store::open(std::path::Path::new(&dir)).unwrap();
+    
+    // Set multiple key-value pairs atomically
+    let entries = vec![
+        ("users/alice/name".to_string(), "Alice".to_string()),
+        ("users/alice/age".to_string(), "30".to_string()),
+        ("users/bob/name".to_string(), "Bob".to_string()),
+        ("users/bob/age".to_string(), "25".to_string()),
+    ];
+    
+    store.set_many(entries, None).unwrap();
+    
+    // Verify all entries were stored
+    assert_eq!(store.get("users/alice/name").unwrap(), Some("Alice".to_string()));
+    assert_eq!(store.get("users/alice/age").unwrap(), Some("30".to_string()));
+    assert_eq!(store.get("users/bob/name").unwrap(), Some("Bob".to_string()));
+    assert_eq!(store.get("users/bob/age").unwrap(), Some("25".to_string()));
+    
+    cleanup(&dir);
+}
+
+fn test_set_many_with_subtree_replacement() {
+    let dir = test_dir("set_many_replace");
+    let store = Store::open(std::path::Path::new(&dir)).unwrap();
+    
+    // Set initial data
+    store.set("users/alice/name", "Alice", false).unwrap();
+    store.set("users/alice/age", "30", false).unwrap();
+    store.set("users/alice/job", "Engineer", false).unwrap();
+    
+    // Replace entire alice subtree with new data
+    let new_alice = vec![
+        ("users/alice/name".to_string(), "Alice Smith".to_string()),
+        ("users/alice/email".to_string(), "alice@example.com".to_string()),
+    ];
+    
+    store.set_many(new_alice, Some("users/alice")).unwrap();
+    
+    // Verify replacement happened
+    assert_eq!(store.get("users/alice/name").unwrap(), Some("Alice Smith".to_string()));
+    assert_eq!(store.get("users/alice/email").unwrap(), Some("alice@example.com".to_string()));
+    assert_eq!(store.get("users/alice/age").unwrap(), None); // Should be gone
+    assert_eq!(store.get("users/alice/job").unwrap(), None); // Should be gone
+    
+    cleanup(&dir);
+}
+
+fn test_set_many_empty() {
+    let dir = test_dir("set_many_empty");
+    let store = Store::open(std::path::Path::new(&dir)).unwrap();
+    
+    // Empty batch should succeed and do nothing
+    store.set_many(vec![], None).unwrap();
+    store.set_many(vec![], Some("some/path")).unwrap();
+    
+    cleanup(&dir);
+}
+
+fn test_set_many_parent_scalar_violation() {
+    let dir = test_dir("set_many_violation");
+    let store = Store::open(std::path::Path::new(&dir)).unwrap();
+    
+    // Set a scalar value
+    store.set("config", "scalar_value", false).unwrap();
+    
+    // Try to set children under the scalar - should fail
+    let entries = vec![
+        ("config/child1".to_string(), "value1".to_string()),
+        ("config/child2".to_string(), "value2".to_string()),
+    ];
+    
+    let result = store.set_many(entries, None);
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err().to_string(), "Cannot write under scalar parent");
+    
+    cleanup(&dir);
+}
+
+fn test_object_flattening_simulation() {
+    let dir = test_dir("object_flatten");
+    let store = Store::open(std::path::Path::new(&dir)).unwrap();
+    
+    // Simulate what Node.js wrapper would do: flatten a JS object
+    // Original object: { name: "Alice", age: 30, settings: { theme: "dark", notifications: true } }
+    let flattened = vec![
+        ("users/123/name".to_string(), "Alice".to_string()),
+        ("users/123/age".to_string(), "30".to_string()),
+        ("users/123/settings/theme".to_string(), "dark".to_string()),
+        ("users/123/settings/notifications".to_string(), "true".to_string()),
+    ];
+    
+    store.set_many(flattened, Some("users/123")).unwrap();
+    
+    // Should be able to access individual properties (like Firebase)
+    assert_eq!(store.get("users/123/name").unwrap(), Some("Alice".to_string()));
+    assert_eq!(store.get("users/123/age").unwrap(), Some("30".to_string()));
+    assert_eq!(store.get("users/123/settings/theme").unwrap(), Some("dark".to_string()));
+    assert_eq!(store.get("users/123/settings/notifications").unwrap(), Some("true".to_string()));
+    
+    // Should be able to get subtree as JSON with trailing slash
+    let subtree_json = store.get("users/123/").unwrap().unwrap();
+    assert!(subtree_json.contains("\"name\":\"Alice\""));
+    assert!(subtree_json.contains("\"age\":\"30\""));
+    assert!(subtree_json.contains("\"theme\":\"dark\""));
+    
+    // FIREBASE BEHAVIOR: Should also get object WITHOUT trailing slash when there are children
+    let object_json = store.get("users/123").unwrap().unwrap();
+    assert!(object_json.contains("\"name\":\"Alice\""));
+    assert!(object_json.contains("\"age\":\"30\""));
+    
+    // And nested objects too
+    let settings_json = store.get("users/123/settings").unwrap().unwrap();
+    assert!(settings_json.contains("\"theme\":\"dark\""));
+    assert!(settings_json.contains("\"notifications\":\"true\""));
+    
+    cleanup(&dir);
+}
+
 // ==================== TEST RUNNER ====================
 
 fn main() {
@@ -730,6 +855,11 @@ fn main() {
         ("Wildcard Star Match", test_wildcard_star_match as fn()),
         ("Wildcard Question Match", test_wildcard_question_match as fn()),
         ("Wildcard Delete", test_wildcard_delete as fn()),
+        ("Set Many Basic", test_set_many_basic as fn()),
+        ("Set Many Subtree Replace", test_set_many_with_subtree_replacement as fn()),
+        ("Set Many Empty", test_set_many_empty as fn()),
+        ("Set Many Parent Violation", test_set_many_parent_scalar_violation as fn()),
+        ("Object Flattening", test_object_flattening_simulation as fn()),
     ];
     
     let mut passed = 0;
@@ -754,5 +884,41 @@ fn main() {
     
     if failed > 0 {
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod reconstruction_tests {
+    use super::waldb_store::*;
+    use tempfile::tempdir;
+    
+    #[test]
+    fn test_object_reconstruction_after_flush() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        
+        // Set individual properties (simulating flattened object)
+        store.set("obj/a", "n:1", false).unwrap();
+        store.set("obj/b", "n:2", false).unwrap();
+        store.set("obj/c/d", "n:3", false).unwrap();
+        
+        // Before flush - should reconstruct
+        let result = store.get("obj").unwrap();
+        println!("Before flush: {:?}", result);
+        assert!(result.is_some(), "Should reconstruct object before flush");
+        
+        // Flush to segments
+        store.flush().unwrap();
+        
+        // After flush - should still reconstruct
+        let result2 = store.get("obj").unwrap();
+        println!("After flush: {:?}", result2);
+        assert!(result2.is_some(), "Should reconstruct object after flush");
+        
+        // Reopen store
+        let store2 = Store::open(dir.path()).unwrap();
+        let result3 = store2.get("obj").unwrap();
+        println!("After reopen: {:?}", result3);
+        assert!(result3.is_some(), "Should reconstruct object after reopen");
     }
 }
