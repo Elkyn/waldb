@@ -1,0 +1,36 @@
+[package]
+name = "waldb"
+version = "0.1.0"
+authors = ["Elkyn"]
+edition = "2021"
+description = "High-performance write-ahead log database with tree semantics"
+repository = "https://github.com/elkyn/waldb"
+license = "MIT"
+keywords = ["database", "tree", "lsm", "firebase", "realtime"]
+categories = ["database", "data-structures"]
+
+[dependencies]
+tokio = { version = "1.40", features = ["full"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+tempfile = "3.12"
+rand = "0.8"
+
+[[bench]]
+name = "waldb_bench"
+harness = false
+path = "benches/waldb_bench.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+[lib]
+name = "waldb"
+path = "async_wrapper.rs"
+
+[[bin]]
+name = "waldb"
+path = "waldb.rs"

@@ -1,0 +1,31 @@
+{
+  "name": "@elkyn/waldb",
+  "version": "0.1.0",
+  "description": "Node.js bindings for WalDB - High-performance write-ahead log database with tree semantics",
+  "main": "index.js",
+  "scripts": {
+    "build": "cargo-cp-artifact -nc index.node -- cargo build --message-format=json-render-diagnostics",
+    "build-debug": "npm run build --",
+    "build-release": "npm run build -- --release",
+    "install": "npm run build-release",
+    "test": "node test.js"
+  },
+  "keywords": [
+    "database",
+    "tree",
+    "lsm",
+    "firebase",
+    "realtime",
+    "waldb",
+    "native"
+  ],
+  "author": "Elkyn",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/elkyn/waldb"
+  },
+  "devDependencies": {
+    "cargo-cp-artifact": "^0.1.8"
+  }
+}

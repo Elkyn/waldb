@@ -1,0 +1,16 @@
+[package]
+name = "waldb-node"
+version = "0.1.0"
+authors = ["Elkyn"]
+edition = "2021"
+exclude = ["artifacts.json", "index.node"]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+neon = "0.10"
+waldb = { path = "../.." }
+
+[build-dependencies]
+neon-build = "0.10"
