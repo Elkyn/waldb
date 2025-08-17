@@ -1,4 +1,4 @@
-name: Build Native Binaries
+name: Release and Publish
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
   packages: write
 
 jobs:
-  build:
+  build-binaries:
     strategy:
       matrix:
         include:
@@ -87,11 +87,9 @@ jobs:
           path: ./bindings/node/waldb-${{ matrix.target }}.tar.gz
           
   release:
-    needs: build
+    needs: build-binaries
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
-    permissions:
-      contents: write
     
     steps:
       - uses: actions/checkout@v4
@@ -110,3 +108,38 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
+  publish-npm:
+    needs: release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+          
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        
+      - name: Install dependencies
+        working-directory: ./bindings/node
+        run: npm install --ignore-scripts
+        
+      - name: Build
+        working-directory: ./bindings/node
+        run: npm run build-release
+        
+      - name: Run tests
+        working-directory: ./bindings/node
+        run: npm test
+        
+      - name: Publish to npm
+        working-directory: ./bindings/node
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
