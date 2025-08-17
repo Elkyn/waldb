@@ -288,7 +288,7 @@ impl Store {
                 }
             }
             
-            if let Some((val, seq)) = self.get_from_segment(seg, path)? {
+            if let Some((val, seq)) = self.point_lookup(seg, path)? {
                 if !self.covered_by_subtomb(&inner, path, seq) {
                     if best.is_none() || best.as_ref().unwrap().1 < seq {
                         best = Some((val, seq));
@@ -396,7 +396,7 @@ impl Store {
         }
         
         if tree.is_empty() {
-            return Ok(Vec::new());
+            return Ok(None);
         }
         
         // Convert to nested JSON
@@ -404,6 +404,70 @@ impl Store {
     }
     
     // Removed tree_to_json - no more JSON reconstruction
+        use std::collections::BTreeMap as TreeMap;
+        
+        #[derive(Debug)]
+        enum JsonNode {
+            Value(String),
+            Object(TreeMap<String, JsonNode>),
+        }
+        
+        fn insert_path(root: &mut TreeMap<String, JsonNode>, parts: &[&str], value: String) {
+            if parts.is_empty() {
+                return;
+            }
+            
+            if parts.len() == 1 {
+                root.insert(parts[0].to_string(), JsonNode::Value(value));
+            } else {
+                let entry = root.entry(parts[0].to_string())
+                    .or_insert_with(|| JsonNode::Object(TreeMap::new()));
+                
+                if let JsonNode::Object(obj) = entry {
+                    insert_path(obj, &parts[1..], value);
+                }
+            }
+        }
+        
+        // Build hierarchical structure
+        let mut root = TreeMap::new();
+        
+        for (full_path, (value, _)) in tree {
+            let relative = &full_path[prefix.len()..];
+            let parts: Vec<&str> = relative.split('/').filter(|s| !s.is_empty()).collect();
+            
+            if parts.is_empty() {
+                continue;
+            }
+            
+            // Insert into tree structure
+            insert_path(&mut root, &parts, value.clone());
+        }
+        
+        // Convert to JSON string
+        fn node_to_json(node: &JsonNode) -> String {
+            match node {
+                JsonNode::Value(s) => {
+                    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+                }
+                JsonNode::Object(map) => {
+                    if map.is_empty() {
+                        return "{}".to_string();
+                    }
+                    
+                    let items: Vec<String> = map.iter().map(|(k, v)| {
+                        format!("\"{}\":{}", 
+                            k.replace('"', "\\\""),
+                            node_to_json(v))
+                    }).collect();
+                    
+                    format!("{{{}}}", items.join(","))
+                }
+            }
+        }
+        
+        node_to_json(&JsonNode::Object(root))
+    }
     
     fn covered_by_subtomb(&self, inner: &std::sync::RwLockReadGuard<StoreInner>, key: &str, seq: u64) -> bool {
         for (prefix, tomb_seq) in &inner.subtombs {

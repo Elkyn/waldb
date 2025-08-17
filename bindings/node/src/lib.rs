@@ -1,32 +1,24 @@
 use neon::prelude::*;
 use std::sync::Arc;
-use tokio::runtime::Runtime;
-use once_cell::sync::Lazy;
+use std::path::Path;
 
-// Include the async wrapper
-mod async_store {
-    include!("../../../async_wrapper.rs");
+// Include the core directly (no async wrapper)
+mod store {
+    include!("../../../waldb.rs");
 }
 
-use async_store::AsyncStore;
-
-// Global tokio runtime for async operations
-static RUNTIME: Lazy<Arc<Runtime>> = Lazy::new(|| {
-    Arc::new(
-        Runtime::new().expect("Failed to create Tokio runtime")
-    )
-});
+use store::Store;
 
 // Wrapper struct that can be stored in JavaScript
 struct StoreWrapper {
-    store: Arc<AsyncStore>,
+    store: Arc<Store>,
 }
 
 // Implement Finalize for cleanup when JS object is GC'd
 impl Finalize for StoreWrapper {}
 
 // Type alias for convenience
-type BoxedAsyncStore = JsBox<StoreWrapper>;
+type BoxedStore = JsBox<StoreWrapper>;
 
 // Open database - returns promise with boxed store
 fn open(mut cx: FunctionContext) -> JsResult<JsPromise> {
@@ -34,8 +26,8 @@ fn open(mut cx: FunctionContext) -> JsResult<JsPromise> {
     let channel = cx.channel();
     let (deferred, promise) = cx.promise();
     
-    RUNTIME.spawn(async move {
-        let result = AsyncStore::open(std::path::Path::new(&path)).await;
+    std::thread::spawn(move || {
+        let result = Store::open(Path::new(&path));
         
         deferred.settle_with(&channel, move |mut cx| {
             match result {
@@ -53,23 +45,58 @@ fn open(mut cx: FunctionContext) -> JsResult<JsPromise> {
     Ok(promise)
 }
 
-// Get value - returns promise
-fn get(mut cx: FunctionContext) -> JsResult<JsPromise> {
-    let store = cx.argument::<BoxedAsyncStore>(0)?;
-    let key = cx.argument::<JsString>(1)?.value(&mut cx);
+// Get entries - returns array of [key, value] pairs
+fn get_entries(mut cx: FunctionContext) -> JsResult<JsPromise> {
+    let store = cx.argument::<BoxedStore>(0)?;
+    let prefix = cx.argument::<JsString>(1)?.value(&mut cx);
     let channel = cx.channel();
     let (deferred, promise) = cx.promise();
     
     let store_arc = Arc::clone(&store.store);
     
-    RUNTIME.spawn(async move {
-        let result = store_arc.get(&key).await.map_err(|e| e.to_string());
+    std::thread::spawn(move || {
+        // Check for exact match first
+        if let Ok(Some(value)) = store_arc.get(&prefix) {
+            deferred.settle_with(&channel, move |mut cx| {
+                let js_array = cx.empty_array();
+                let pair = cx.empty_array();
+                let js_key = cx.string(prefix);
+                let js_value = cx.string(value);
+                pair.set(&mut cx, 0, js_key)?;
+                pair.set(&mut cx, 1, js_value)?;
+                js_array.set(&mut cx, 0, pair)?;
+                Ok(js_array)
+            });
+            return;
+        }
+        
+        // Use get_pattern with wildcard for prefix matching
+        let pattern = if prefix.is_empty() {
+            "*".to_string()
+        } else if prefix.ends_with('/') {
+            format!("{}*", prefix)
+        } else {
+            // No exact match, look for children
+            format!("{}/*", prefix)
+        };
+        
+        let result = store_arc.get_pattern(&pattern);
         
         deferred.settle_with(&channel, move |mut cx| {
             match result {
-                Ok(Some(value)) => Ok(cx.string(value).upcast::<JsValue>()),
-                Ok(None) => Ok(cx.null().upcast::<JsValue>()),
-                Err(e) => cx.throw_error(e)
+                Ok(entries) => {
+                    let js_array = cx.empty_array();
+                    for (i, (k, v)) in entries.into_iter().enumerate() {
+                        let pair = cx.empty_array();
+                        let js_key = cx.string(k);
+                        let js_value = cx.string(v);
+                        pair.set(&mut cx, 0, js_key)?;
+                        pair.set(&mut cx, 1, js_value)?;
+                        js_array.set(&mut cx, i as u32, pair)?;
+                    }
+                    Ok(js_array)
+                }
+                Err(e) => cx.throw_error(format!("Get failed: {}", e))
             }
         });
     });
@@ -79,7 +106,7 @@ fn get(mut cx: FunctionContext) -> JsResult<JsPromise> {
 
 // Set value - returns promise
 fn set(mut cx: FunctionContext) -> JsResult<JsPromise> {
-    let store = cx.argument::<BoxedAsyncStore>(0)?;
+    let store = cx.argument::<BoxedStore>(0)?;
     let key = cx.argument::<JsString>(1)?.value(&mut cx);
     let value = cx.argument::<JsString>(2)?.value(&mut cx);
     let force = cx.argument_opt(3)
@@ -92,13 +119,13 @@ fn set(mut cx: FunctionContext) -> JsResult<JsPromise> {
     
     let store_arc = Arc::clone(&store.store);
     
-    RUNTIME.spawn(async move {
-        let result = store_arc.set(&key, &value, force).await.map_err(|e| e.to_string());
+    std::thread::spawn(move || {
+        let result = store_arc.set(&key, &value, force);
         
         deferred.settle_with(&channel, move |mut cx| {
             match result {
                 Ok(_) => Ok(cx.undefined()),
-                Err(e) => cx.throw_error(e)
+                Err(e) => cx.throw_error(format!("Set failed: {}", e))
             }
         });
     });
@@ -108,23 +135,22 @@ fn set(mut cx: FunctionContext) -> JsResult<JsPromise> {
 
 // Delete - returns promise
 fn delete(mut cx: FunctionContext) -> JsResult<JsPromise> {
-    let store = cx.argument::<BoxedAsyncStore>(0)?;
+    let store = cx.argument::<BoxedStore>(0)?;
     let key = cx.argument::<JsString>(1)?.value(&mut cx);
     let channel = cx.channel();
     let (deferred, promise) = cx.promise();
     
     let store_arc = Arc::clone(&store.store);
     
-    RUNTIME.spawn(async move {
+    std::thread::spawn(move || {
         // Delete key and subtree for Firebase compat
-        let r1 = store_arc.delete(&key).await;
-        let r2 = store_arc.delete_subtree(&key).await;
-        let result = r1.and(r2).map_err(|e| e.to_string());
+        let _ = store_arc.delete(&key);
+        let result = store_arc.delete_subtree(&key);
         
         deferred.settle_with(&channel, move |mut cx| {
             match result {
                 Ok(_) => Ok(cx.undefined()),
-                Err(e) => cx.throw_error(e)
+                Err(e) => cx.throw_error(format!("Delete failed: {}", e))
             }
         });
     });
@@ -134,7 +160,7 @@ fn delete(mut cx: FunctionContext) -> JsResult<JsPromise> {
 
 // Set many - returns promise
 fn set_many(mut cx: FunctionContext) -> JsResult<JsPromise> {
-    let store = cx.argument::<BoxedAsyncStore>(0)?;
+    let store = cx.argument::<BoxedStore>(0)?;
     let entries_obj = cx.argument::<JsObject>(1)?;
     let replace_subtree_at = cx.argument_opt(2)
         .and_then(|arg| arg.downcast::<JsString, _>(&mut cx).ok())
@@ -162,13 +188,13 @@ fn set_many(mut cx: FunctionContext) -> JsResult<JsPromise> {
     
     let store_arc = Arc::clone(&store.store);
     
-    RUNTIME.spawn(async move {
-        let result = store_arc.set_many(entries, replace_subtree_at.as_deref()).await.map_err(|e| e.to_string());
+    std::thread::spawn(move || {
+        let result = store_arc.set_many(entries, replace_subtree_at.as_deref());
         
         deferred.settle_with(&channel, move |mut cx| {
             match result {
                 Ok(_) => Ok(cx.undefined()),
-                Err(e) => cx.throw_error(e)
+                Err(e) => cx.throw_error(format!("SetMany failed: {}", e))
             }
         });
     });
@@ -178,19 +204,19 @@ fn set_many(mut cx: FunctionContext) -> JsResult<JsPromise> {
 
 // Flush - returns promise
 fn flush(mut cx: FunctionContext) -> JsResult<JsPromise> {
-    let store = cx.argument::<BoxedAsyncStore>(0)?;
+    let store = cx.argument::<BoxedStore>(0)?;
     let channel = cx.channel();
     let (deferred, promise) = cx.promise();
     
     let store_arc = Arc::clone(&store.store);
     
-    RUNTIME.spawn(async move {
-        let result = store_arc.flush().await.map_err(|e| e.to_string());
+    std::thread::spawn(move || {
+        let result = store_arc.flush();
         
         deferred.settle_with(&channel, move |mut cx| {
             match result {
                 Ok(_) => Ok(cx.undefined()),
-                Err(e) => cx.throw_error(e)
+                Err(e) => cx.throw_error(format!("Flush failed: {}", e))
             }
         });
     });
@@ -200,15 +226,15 @@ fn flush(mut cx: FunctionContext) -> JsResult<JsPromise> {
 
 // Get pattern - returns promise
 fn get_pattern(mut cx: FunctionContext) -> JsResult<JsPromise> {
-    let store = cx.argument::<BoxedAsyncStore>(0)?;
+    let store = cx.argument::<BoxedStore>(0)?;
     let pattern = cx.argument::<JsString>(1)?.value(&mut cx);
     let channel = cx.channel();
     let (deferred, promise) = cx.promise();
     
     let store_arc = Arc::clone(&store.store);
     
-    RUNTIME.spawn(async move {
-        let result = store_arc.get_pattern(&pattern).await.map_err(|e| e.to_string());
+    std::thread::spawn(move || {
+        let result = store_arc.get_pattern(&pattern);
         
         deferred.settle_with(&channel, move |mut cx| {
             match result {
@@ -221,7 +247,7 @@ fn get_pattern(mut cx: FunctionContext) -> JsResult<JsPromise> {
                     }
                     Ok(obj)
                 }
-                Err(e) => cx.throw_error(e)
+                Err(e) => cx.throw_error(format!("GetPattern failed: {}", e))
             }
         });
     });
@@ -231,7 +257,7 @@ fn get_pattern(mut cx: FunctionContext) -> JsResult<JsPromise> {
 
 // Get range - returns promise
 fn get_range(mut cx: FunctionContext) -> JsResult<JsPromise> {
-    let store = cx.argument::<BoxedAsyncStore>(0)?;
+    let store = cx.argument::<BoxedStore>(0)?;
     let start = cx.argument::<JsString>(1)?.value(&mut cx);
     let end = cx.argument::<JsString>(2)?.value(&mut cx);
     let channel = cx.channel();
@@ -239,8 +265,8 @@ fn get_range(mut cx: FunctionContext) -> JsResult<JsPromise> {
     
     let store_arc = Arc::clone(&store.store);
     
-    RUNTIME.spawn(async move {
-        let result = store_arc.get_range(&start, &end).await.map_err(|e| e.to_string());
+    std::thread::spawn(move || {
+        let result = store_arc.get_range(&start, &end);
         
         deferred.settle_with(&channel, move |mut cx| {
             match result {
@@ -253,7 +279,76 @@ fn get_range(mut cx: FunctionContext) -> JsResult<JsPromise> {
                     }
                     Ok(obj)
                 }
-                Err(e) => cx.throw_error(e)
+                Err(e) => cx.throw_error(format!("GetRange failed: {}", e))
+            }
+        });
+    });
+    
+    Ok(promise)
+}
+
+// Get pattern entries - returns array of [key, value] pairs
+fn get_pattern_entries(mut cx: FunctionContext) -> JsResult<JsPromise> {
+    let store = cx.argument::<BoxedStore>(0)?;
+    let pattern = cx.argument::<JsString>(1)?.value(&mut cx);
+    let channel = cx.channel();
+    let (deferred, promise) = cx.promise();
+    
+    let store_arc = Arc::clone(&store.store);
+    
+    std::thread::spawn(move || {
+        let result = store_arc.get_pattern(&pattern);
+        
+        deferred.settle_with(&channel, move |mut cx| {
+            match result {
+                Ok(matches) => {
+                    let js_array = cx.empty_array();
+                    for (i, (key, value)) in matches.into_iter().enumerate() {
+                        let pair = cx.empty_array();
+                        let js_key = cx.string(key);
+                        let js_value = cx.string(value);
+                        pair.set(&mut cx, 0, js_key)?;
+                        pair.set(&mut cx, 1, js_value)?;
+                        js_array.set(&mut cx, i as u32, pair)?;
+                    }
+                    Ok(js_array)
+                }
+                Err(e) => cx.throw_error(format!("GetPatternEntries failed: {}", e))
+            }
+        });
+    });
+    
+    Ok(promise)
+}
+
+// Get range entries - returns array of [key, value] pairs
+fn get_range_entries(mut cx: FunctionContext) -> JsResult<JsPromise> {
+    let store = cx.argument::<BoxedStore>(0)?;
+    let start = cx.argument::<JsString>(1)?.value(&mut cx);
+    let end = cx.argument::<JsString>(2)?.value(&mut cx);
+    let channel = cx.channel();
+    let (deferred, promise) = cx.promise();
+    
+    let store_arc = Arc::clone(&store.store);
+    
+    std::thread::spawn(move || {
+        let result = store_arc.get_range(&start, &end);
+        
+        deferred.settle_with(&channel, move |mut cx| {
+            match result {
+                Ok(matches) => {
+                    let js_array = cx.empty_array();
+                    for (i, (key, value)) in matches.into_iter().enumerate() {
+                        let pair = cx.empty_array();
+                        let js_key = cx.string(key);
+                        let js_value = cx.string(value);
+                        pair.set(&mut cx, 0, js_key)?;
+                        pair.set(&mut cx, 1, js_value)?;
+                        js_array.set(&mut cx, i as u32, pair)?;
+                    }
+                    Ok(js_array)
+                }
+                Err(e) => cx.throw_error(format!("GetRangeEntries failed: {}", e))
             }
         });
     });
@@ -263,15 +358,16 @@ fn get_range(mut cx: FunctionContext) -> JsResult<JsPromise> {
 
 #[neon::main]
 fn main(mut cx: ModuleContext) -> NeonResult<()> {
-    // All methods return promises - true async!
     cx.export_function("open", open)?;
-    cx.export_function("get", get)?;
+    cx.export_function("getEntries", get_entries)?;
     cx.export_function("set", set)?;
     cx.export_function("delete", delete)?;
     cx.export_function("setMany", set_many)?;
     cx.export_function("flush", flush)?;
     cx.export_function("getPattern", get_pattern)?;
     cx.export_function("getRange", get_range)?;
+    cx.export_function("getPatternEntries", get_pattern_entries)?;
+    cx.export_function("getRangeEntries", get_range_entries)?;
     
     Ok(())
 }

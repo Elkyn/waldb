@@ -41,29 +41,44 @@ class WalDB {
     }
     
     /**
-     * Get a value or subtree at the given path (async)
+     * Get entries with decoded values (default) (async)
      * @param {string} key - The path to get
-     * @returns {Promise<any>} The value or null if not found
+     * @returns {Promise<Array<[string, any]>>} Array of [key, value] pairs with decoded values
      */
     async get(key) {
-        const result = await native.get(this._store, key);
+        const entries = await native.getEntries(this._store, key);
+        // Decode values in the entries
+        return entries.map(([k, v]) => [k, WalDB._decodeValue(v)]);
+    }
+    
+    /**
+     * Get raw entries with prefixed strings (async)
+     * @param {string} key - The path to get
+     * @returns {Promise<Array<[string, string]>>} Array of [key, value] pairs with raw prefixed values
+     */
+    async getRaw(key) {
+        return native.getEntries(this._store, key);
+    }
+    
+    /**
+     * Get value or subtree as reconstructed object (async)
+     * @param {string} key - The path to get
+     * @returns {Promise<any>} The value or reconstructed object, null if not found
+     */
+    async getObject(key) {
+        const entries = await this.get(key);
         
-        // If result is a string, try to decode it
-        if (typeof result === 'string') {
-            // Check if it's JSON (reconstructed object from Rust)
-            if (result.startsWith('{') || result.startsWith('[')) {
-                try {
-                    const parsed = JSON.parse(result);
-                    return this._decodeObject(parsed);
-                } catch(e) {
-                    // Not JSON, decode as single value
-                    return WalDB._decodeValue(result);
-                }
-            }
-            return WalDB._decodeValue(result);
+        if (entries.length === 0) {
+            return null;
         }
         
-        return result;
+        // If single entry with exact key match, return the value directly
+        if (entries.length === 1 && entries[0][0] === key) {
+            return entries[0][1];
+        }
+        
+        // Otherwise reconstruct object from entries
+        return this._reconstructFromEntries(entries, key);
     }
     
     /**
@@ -109,6 +124,29 @@ class WalDB {
     }
     
     /**
+     * Get all key-value pairs matching a pattern as entries array (async)
+     * @param {string} pattern - Pattern with * and ? wildcards
+     * @returns {Promise<Array<[string, any]>>} Array of [key, value] pairs
+     */
+    async getPatternEntries(pattern) {
+        const entries = await native.getPatternEntries(this._store, pattern);
+        // Decode values in the entries
+        return entries.map(([key, value]) => [key, WalDB._decodeValue(value)]);
+    }
+    
+    /**
+     * Get all key-value pairs in a range as entries array (async)
+     * @param {string} start - Start key (inclusive)
+     * @param {string} end - End key (exclusive)
+     * @returns {Promise<Array<[string, any]>>} Array of [key, value] pairs
+     */
+    async getRangeEntries(start, end) {
+        const entries = await native.getRangeEntries(this._store, start, end);
+        // Decode values in the entries
+        return entries.map(([key, value]) => [key, WalDB._decodeValue(value)]);
+    }
+    
+    /**
      * Check if a key exists (async)
      * @param {string} key - The path to check
      * @returns {Promise<boolean>} True if the key exists
@@ -129,6 +167,33 @@ class WalDB {
     
     
     // Private helper methods
+    
+    _reconstructFromEntries(entries, basePath) {
+        const result = {};
+        const baseLen = basePath ? basePath.length + 1 : 0;
+        
+        for (const [key, value] of entries) {
+            // Remove base path to get relative path
+            const relativePath = key.substring(baseLen);
+            
+            // Split path into parts
+            const parts = relativePath.split('/');
+            
+            // Navigate through object structure
+            let current = result;
+            for (let i = 0; i < parts.length - 1; i++) {
+                if (!current[parts[i]]) {
+                    current[parts[i]] = {};
+                }
+                current = current[parts[i]];
+            }
+            
+            // Set the value at the final key
+            current[parts[parts.length - 1]] = value;
+        }
+        
+        return result;
+    }
     
     _flattenObject(basePath, obj, result = {}) {
         for (const [key, value] of Object.entries(obj)) {
@@ -221,7 +286,7 @@ class Reference {
     }
     
     async get() {
-        return this._db.get(this._path);
+        return this._db.getObject(this._path);
     }
     
     async remove() {

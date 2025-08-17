@@ -35,50 +35,50 @@ async function runTests() {
 // Test primitive types
 await test('String preservation', async () => {
     await db.set('string_test', 'hello world');
-    const result = await db.get('string_test');
+    const result = await db.getObject('string_test');
     assert.strictEqual(result, 'hello world');
     assert.strictEqual(typeof result, 'string');
 });
 
 await test('Number preservation', async () => {
     await db.set('integer_test', 42);
-    const intResult = await db.get('integer_test');
+    const intResult = await db.getObject('integer_test');
     assert.strictEqual(intResult, 42);
     assert.strictEqual(typeof intResult, 'number');
     
     await db.set('float_test', 3.14159);
-    const floatResult = await db.get('float_test');
+    const floatResult = await db.getObject('float_test');
     assert.strictEqual(floatResult, 3.14159);
     assert.strictEqual(typeof floatResult, 'number');
     
     await db.set('negative_test', -273.15);
-    const negResult = await db.get('negative_test');
+    const negResult = await db.getObject('negative_test');
     assert.strictEqual(negResult, -273.15);
     assert.strictEqual(typeof negResult, 'number');
 });
 
 await test('Boolean preservation', async () => {
     await db.set('true_test', true);
-    const trueResult = await db.get('true_test');
+    const trueResult = await db.getObject('true_test');
     assert.strictEqual(trueResult, true);
     assert.strictEqual(typeof trueResult, 'boolean');
     
     await db.set('false_test', false);
-    const falseResult = await db.get('false_test');
+    const falseResult = await db.getObject('false_test');
     assert.strictEqual(falseResult, false);
     assert.strictEqual(typeof falseResult, 'boolean');
 });
 
 await test('Null preservation', async () => {
     await db.set('null_test', null);
-    const result = await db.get('null_test');
+    const result = await db.getObject('null_test');
     assert.strictEqual(result, null);
 });
 
 await test('Array preservation', async () => {
     const arr = [1, 'two', true, null, { nested: 'obj' }];
     await db.set('array_test', arr);
-    const result = await db.get('array_test');
+    const result = await db.getObject('array_test');
     assert.deepStrictEqual(result, arr);
     assert(Array.isArray(result));
 });
@@ -100,7 +100,7 @@ await test('Object with mixed types', async () => {
     };
     
     await db.set('users/alice', obj);
-    const result = await db.get('users/alice');
+    const result = await db.getObject('users/alice');
     
     assert.strictEqual(result.name, 'Alice');
     assert.strictEqual(typeof result.name, 'string');
@@ -137,19 +137,19 @@ await test('Direct nested property access with types', async () => {
     await db.set('System/Engines/abc123', engine);
     
     // Access nested properties directly
-    assert.strictEqual(await db.get('System/Engines/abc123/model'), 'V8');
-    assert.strictEqual(typeof await db.get('System/Engines/abc123/model'), 'string');
+    assert.strictEqual(await db.getObject('System/Engines/abc123/model'), 'V8');
+    assert.strictEqual(typeof await db.getObject('System/Engines/abc123/model'), 'string');
     
-    assert.strictEqual(await db.get('System/Engines/abc123/cylinders'), 8);
-    assert.strictEqual(typeof await db.get('System/Engines/abc123/cylinders'), 'number');
+    assert.strictEqual(await db.getObject('System/Engines/abc123/cylinders'), 8);
+    assert.strictEqual(typeof await db.getObject('System/Engines/abc123/cylinders'), 'number');
     
-    assert.strictEqual(await db.get('System/Engines/abc123/turbo'), false);
-    assert.strictEqual(typeof await db.get('System/Engines/abc123/turbo'), 'boolean');
+    assert.strictEqual(await db.getObject('System/Engines/abc123/turbo'), false);
+    assert.strictEqual(typeof await db.getObject('System/Engines/abc123/turbo'), 'boolean');
     
-    assert.strictEqual(await db.get('System/Engines/abc123/displacement'), 5.0);
-    assert.strictEqual(typeof await db.get('System/Engines/abc123/displacement'), 'number');
+    assert.strictEqual(await db.getObject('System/Engines/abc123/displacement'), 5.0);
+    assert.strictEqual(typeof await db.getObject('System/Engines/abc123/displacement'), 'number');
     
-    const features = await db.get('System/Engines/abc123/features');
+    const features = await db.getObject('System/Engines/abc123/features');
     assert.deepStrictEqual(features, ['fuel-injection', 'variable-timing']);
     assert(Array.isArray(features));
 });
@@ -157,28 +157,28 @@ await test('Direct nested property access with types', async () => {
 // Test edge cases
 await test('Empty string preservation', async () => {
     await db.set('empty_string', '');
-    const result = await db.get('empty_string');
+    const result = await db.getObject('empty_string');
     assert.strictEqual(result, '');
     assert.strictEqual(typeof result, 'string');
 });
 
 await test('Zero preservation', async () => {
     await db.set('zero_value', 0);
-    const result = await db.get('zero_value');
+    const result = await db.getObject('zero_value');
     assert.strictEqual(result, 0);
     assert.strictEqual(typeof result, 'number');
 });
 
 await test('String that looks like number', async () => {
     await db.set('string_number', '123');
-    const result = await db.get('string_number');
+    const result = await db.getObject('string_number');
     assert.strictEqual(result, '123');
     assert.strictEqual(typeof result, 'string', 'String "123" should remain a string');
 });
 
 await test('String that looks like boolean', async () => {
     await db.set('string_bool', 'true');
-    const result = await db.get('string_bool');
+    const result = await db.getObject('string_bool');
     assert.strictEqual(result, 'true');
     assert.strictEqual(typeof result, 'string', 'String "true" should remain a string');
 });
@@ -229,15 +229,15 @@ await test('Type preservation in pattern queries', async () => {
 // Test updating values with different types
 await test('Type change on update', async () => {
     await db.set('mutable/value', 'initial string');
-    assert.strictEqual(await db.get('mutable/value'), 'initial string');
+    assert.strictEqual(await db.getObject('mutable/value'), 'initial string');
     
     await db.set('mutable/value', 999);
-    assert.strictEqual(await db.get('mutable/value'), 999);
-    assert.strictEqual(typeof await db.get('mutable/value'), 'number');
+    assert.strictEqual(await db.getObject('mutable/value'), 999);
+    assert.strictEqual(typeof await db.getObject('mutable/value'), 'number');
     
     await db.set('mutable/value', true);
-    assert.strictEqual(await db.get('mutable/value'), true);
-    assert.strictEqual(typeof await db.get('mutable/value'), 'boolean');
+    assert.strictEqual(await db.getObject('mutable/value'), true);
+    assert.strictEqual(typeof await db.getObject('mutable/value'), 'boolean');
 });
 
 // Test complex nested structure
@@ -269,7 +269,7 @@ await test('Complex nested structure with all types', async () => {
     };
     
     await db.set('complex/data', complex);
-    const result = await db.get('complex/data');
+    const result = await db.getObject('complex/data');
     
     // Deep equality check
     assert.deepStrictEqual(result, complex);
@@ -302,19 +302,19 @@ await test('Complex nested structure with all types', async () => {
 // Test special string cases
 await test('Strings with colons (edge case for encoding)', async () => {
     await db.set('url_test', 'https://example.com:8080');
-    const result = await db.get('url_test');
+    const result = await db.getObject('url_test');
     assert.strictEqual(result, 'https://example.com:8080');
     assert.strictEqual(typeof result, 'string');
 });
 
 await test('Strings starting with type prefixes', async () => {
     await db.set('prefix_test1', 's:this looks like encoded');
-    const result1 = await db.get('prefix_test1');
+    const result1 = await db.getObject('prefix_test1');
     assert.strictEqual(result1, 's:this looks like encoded');
     assert.strictEqual(typeof result1, 'string');
     
     await db.set('prefix_test2', 'n:123');
-    const result2 = await db.get('prefix_test2');
+    const result2 = await db.getObject('prefix_test2');
     assert.strictEqual(result2, 'n:123');
     assert.strictEqual(typeof result2, 'string');
 });

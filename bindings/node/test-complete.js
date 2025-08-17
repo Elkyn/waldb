@@ -51,7 +51,7 @@ async function runTests() {
 
     // Test 2: Verify complete object retrieval with types
     console.log('2. Verifying complete object retrieval...');
-    const retrieved = await db.get('System/Engines/abc123');
+    const retrieved = await db.getObject('System/Engines/abc123');
     assert.deepStrictEqual(retrieved, engine);
     assert.strictEqual(typeof retrieved.cylinders, 'number');
     assert.strictEqual(typeof retrieved.turbo, 'boolean');
@@ -62,23 +62,23 @@ async function runTests() {
 
     // Test 3: Direct nested property access
     console.log('3. Testing direct nested property access...');
-    assert.strictEqual(await db.get('System/Engines/abc123/model'), 'V8 TwinTurbo');
-    assert.strictEqual(await db.get('System/Engines/abc123/cylinders'), 8);
-    assert.strictEqual(await db.get('System/Engines/abc123/turbo'), true);
-    assert.strictEqual(await db.get('System/Engines/abc123/displacement'), 5.0);
-    assert.strictEqual(await db.get('System/Engines/abc123/specs/horsepower'), 650);
-    assert.strictEqual(await db.get('System/Engines/abc123/specs/emissions/co2'), 245.5);
-    assert.strictEqual(await db.get('System/Engines/abc123/specs/emissions/compliant'), true);
-    assert.strictEqual(await db.get('System/Engines/abc123/serviceHistory'), null);
+    assert.strictEqual(await db.getObject('System/Engines/abc123/model'), 'V8 TwinTurbo');
+    assert.strictEqual(await db.getObject('System/Engines/abc123/cylinders'), 8);
+    assert.strictEqual(await db.getObject('System/Engines/abc123/turbo'), true);
+    assert.strictEqual(await db.getObject('System/Engines/abc123/displacement'), 5.0);
+    assert.strictEqual(await db.getObject('System/Engines/abc123/specs/horsepower'), 650);
+    assert.strictEqual(await db.getObject('System/Engines/abc123/specs/emissions/co2'), 245.5);
+    assert.strictEqual(await db.getObject('System/Engines/abc123/specs/emissions/compliant'), true);
+    assert.strictEqual(await db.getObject('System/Engines/abc123/serviceHistory'), null);
     console.log('   ✓ All nested properties accessible with correct types');
 
     // Test 4: Update nested property
     console.log('4. Testing nested property updates...');
     await db.set('System/Engines/abc123/specs/horsepower', 675);
-    assert.strictEqual(await db.get('System/Engines/abc123/specs/horsepower'), 675);
+    assert.strictEqual(await db.getObject('System/Engines/abc123/specs/horsepower'), 675);
     
     // Verify parent object still intact
-    const afterUpdate = await db.get('System/Engines/abc123');
+    const afterUpdate = await db.getObject('System/Engines/abc123');
     assert.strictEqual(afterUpdate.specs.horsepower, 675);
     assert.strictEqual(afterUpdate.specs.torque, 580); // Other properties unchanged
     console.log('   ✓ Nested properties updated correctly');
@@ -122,13 +122,13 @@ async function runTests() {
     await db.set('users', users);
     
     // Verify retrieval
-    const allUsers = await db.get('users');
+    const allUsers = await db.getObject('users');
     assert.deepStrictEqual(allUsers, users);
     console.log('   ✓ Multiple users stored and retrieved correctly');
 
     // Test 6: Access individual users
     console.log('6. Testing individual user access...');
-    const alice = await db.get('users/alice');
+    const alice = await db.getObject('users/alice');
     assert.strictEqual(alice.name, 'Alice Johnson');
     assert.strictEqual(alice.age, 28);
     assert.strictEqual(alice.score, 95.5);
@@ -136,7 +136,7 @@ async function runTests() {
     assert.deepStrictEqual(alice.roles, ['admin', 'developer']);
     assert.strictEqual(alice.metadata, null);
     
-    const bob = await db.get('users/bob');
+    const bob = await db.getObject('users/bob');
     assert.strictEqual(bob.active, false);
     assert.strictEqual(bob.metadata.attempts, 3);
     console.log('   ✓ Individual users accessible with correct types');
@@ -166,23 +166,23 @@ async function runTests() {
     
     // Update via reference
     await aliceRef.child('score').set(98.0);
-    assert.strictEqual(await db.get('users/alice/score'), 98.0);
+    assert.strictEqual(await db.getObject('users/alice/score'), 98.0);
     
     // Add new property via reference
     await aliceRef.child('verified').set(true);
-    assert.strictEqual(await db.get('users/alice/verified'), true);
+    assert.strictEqual(await db.getObject('users/alice/verified'), true);
     console.log('   ✓ Reference API works correctly');
 
     // Test 10: Delete operations
     console.log('10. Testing delete operations...');
     await db.delete('users/bob/metadata');
-    assert.strictEqual(await db.get('users/bob/metadata'), null);
-    assert.strictEqual(await db.get('users/bob/name'), 'Bob Smith'); // Other properties intact
+    assert.strictEqual(await db.getObject('users/bob/metadata'), null);
+    assert.strictEqual(await db.getObject('users/bob/name'), 'Bob Smith'); // Other properties intact
     
     // Delete entire user
     await db.delete('users/charlie');
-    assert.strictEqual(await db.get('users/charlie'), null);
-    assert.strictEqual(await db.get('users/alice/name'), 'Alice Johnson'); // Others unaffected
+    assert.strictEqual(await db.getObject('users/charlie'), null);
+    assert.strictEqual(await db.getObject('users/alice/name'), 'Alice Johnson'); // Others unaffected
     console.log('   ✓ Delete operations work correctly');
 
     // Test 11: Replace subtree
@@ -198,9 +198,9 @@ async function runTests() {
     };
     
     await db.set('System/Engines/abc123', newEngine, true); // Force replace
-    const replaced = await db.get('System/Engines/abc123');
+    const replaced = await db.getObject('System/Engines/abc123');
     assert.deepStrictEqual(replaced, newEngine);
-    assert.strictEqual(await db.get('System/Engines/abc123/warranty'), null); // Old properties gone
+    assert.strictEqual(await db.getObject('System/Engines/abc123/warranty'), null); // Old properties gone
     console.log('   ✓ Subtree replacement works correctly');
 
     // Test 12: Persistence
@@ -210,11 +210,11 @@ async function runTests() {
     // Open new instance (no cache, so this is a true reopen)
     const db2 = await WalDB.open(testDir);
     // Get individual properties since the object was flattened
-    assert.strictEqual(await db2.get('System/Engines/abc123/model'), 'V6 Hybrid');
-    assert.strictEqual(await db2.get('System/Engines/abc123/cylinders'), 6);
-    assert.strictEqual(await db2.get('System/Engines/abc123/electric'), true);
+    assert.strictEqual(await db2.getObject('System/Engines/abc123/model'), 'V6 Hybrid');
+    assert.strictEqual(await db2.getObject('System/Engines/abc123/cylinders'), 6);
+    assert.strictEqual(await db2.getObject('System/Engines/abc123/electric'), true);
     
-    const persistedAlice = await db2.get('users/alice');
+    const persistedAlice = await db2.getObject('users/alice');
     assert.strictEqual(persistedAlice.score, 98.0);
     assert.strictEqual(persistedAlice.verified, true);
     console.log('   ✓ Data persists correctly across reopens');
@@ -226,11 +226,11 @@ async function runTests() {
     await db.set('test/zero', 0);
     await db.set('test/false', false);
     
-    assert.strictEqual(await db.get('test/empty_string'), '');
-    assert.strictEqual(await db.get('test/null_value'), null);
-    assert.strictEqual(await db.get('test/zero'), 0);
-    assert.strictEqual(await db.get('test/false'), false);
-    assert.strictEqual(await db.get('test/nonexistent'), null);
+    assert.strictEqual(await db.getObject('test/empty_string'), '');
+    assert.strictEqual(await db.getObject('test/null_value'), null);
+    assert.strictEqual(await db.getObject('test/zero'), 0);
+    assert.strictEqual(await db.getObject('test/false'), false);
+    assert.strictEqual(await db.getObject('test/nonexistent'), null);
     console.log('   ✓ Empty values and null handled correctly');
 
     // Test 14: Large dataset
@@ -247,14 +247,14 @@ async function runTests() {
     }
     
     await db.set('large_dataset', largeObj);
-    const retrievedLarge = await db.get('large_dataset');
+    const retrievedLarge = await db.getObject('large_dataset');
     assert.deepStrictEqual(retrievedLarge, largeObj);
     
     // Test specific nested access
-    assert.strictEqual(await db.get('large_dataset/key500/id'), 500);
-    assert.strictEqual(await db.get('large_dataset/key500/value'), 'value500');
-    assert.strictEqual(await db.get('large_dataset/key500/active'), true);
-    assert.strictEqual(await db.get('large_dataset/key500/score'), 750);
+    assert.strictEqual(await db.getObject('large_dataset/key500/id'), 500);
+    assert.strictEqual(await db.getObject('large_dataset/key500/value'), 'value500');
+    assert.strictEqual(await db.getObject('large_dataset/key500/active'), true);
+    assert.strictEqual(await db.getObject('large_dataset/key500/score'), 750);
     console.log('   ✓ Large dataset handled correctly');
 
     // Test 15: Complex updates
@@ -272,9 +272,9 @@ async function runTests() {
     });
     
     // Verify both engines exist
-    assert.strictEqual(await db.get('System/Engines/abc123/model'), 'V6 Hybrid');
-    assert.strictEqual(await db.get('System/Engines/xyz789/model'), 'Electric Motor');
-    assert.strictEqual(await db.get('System/Engines/xyz789/battery/capacity'), 75);
+    assert.strictEqual(await db.getObject('System/Engines/abc123/model'), 'V6 Hybrid');
+    assert.strictEqual(await db.getObject('System/Engines/xyz789/model'), 'Electric Motor');
+    assert.strictEqual(await db.getObject('System/Engines/xyz789/battery/capacity'), 75);
     
     console.log('   ✓ Complex updates work correctly');
 
