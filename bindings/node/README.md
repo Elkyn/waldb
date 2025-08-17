@@ -1,12 +1,20 @@
 # WalDB Node.js Bindings
 
-Node.js bindings for WalDB using the Neon framework, providing a Firebase Realtime Database-like API.
+High-performance async Node.js bindings for WalDB, providing a Firebase Realtime Database-like API with tree semantics.
 
 ## Installation
 
 ```bash
 npm install @elkyn/waldb
 ```
+
+## Features
+
+- 🚀 **High Performance**: 12,000+ writes/sec, 40,000+ reads/sec
+- 🌲 **Tree Semantics**: Firebase-like hierarchical data structure
+- 🔄 **Async/Await**: All operations are async for non-blocking I/O
+- 🎯 **Type Preservation**: Maintains JavaScript types (numbers, booleans, arrays, etc.)
+- 📦 **Three-tier API**: Flexible data access patterns
 
 ## Usage
 
@@ -15,29 +23,47 @@ npm install @elkyn/waldb
 ```javascript
 const WalDB = require('@elkyn/waldb');
 
-// Open database
-const db = WalDB.open('./my_database');
+// Open database (async)
+const db = await WalDB.open('./my_database');
 
-// Set values
-db.set('users/alice/name', 'Alice Smith');
-db.set('users/alice/profile', {
+// Set values (async)
+await db.set('users/alice/name', 'Alice Smith');
+await db.set('users/alice/profile', {
   age: 30,
   city: 'New York',
   interests: ['coding', 'music']
 });
 
-// Get values
-const name = db.get('users/alice/name');        // 'Alice Smith'
-const profile = db.get('users/alice/profile');  // { age: 30, city: 'New York', ... }
-const users = db.get('users/');                 // Full users subtree
+// Get values - three different methods
+const entries = await db.get('users/alice');        // [[key, value], ...] array
+const raw = await db.getRaw('users/alice');         // Raw entries with type prefixes
+const obj = await db.getObject('users/alice');      // Reconstructed object
 
 // Check existence
-if (db.exists('users/alice/email')) {
+if (await db.exists('users/alice/email')) {
   console.log('Alice has an email');
 }
 
 // Delete
-db.delete('users/alice/temp_data');
+await db.delete('users/alice/temp_data');
+```
+
+### Three-tier API
+
+WalDB provides three methods for reading data, each optimized for different use cases:
+
+```javascript
+// 1. get() - Returns decoded entries array
+const entries = await db.get('users');
+// Result: [['users/alice/name', 'Alice'], ['users/alice/age', 30], ...]
+
+// 2. getRaw() - Returns raw entries with type prefixes
+const raw = await db.getRaw('users');  
+// Result: [['users/alice/name', 's:Alice'], ['users/alice/age', 'n:30'], ...]
+
+// 3. getObject() - Returns reconstructed JavaScript object
+const obj = await db.getObject('users');
+// Result: { alice: { name: 'Alice', age: 30 }, ... }
 ```
 
 ### Firebase-style Reference API
@@ -47,136 +73,86 @@ db.delete('users/alice/temp_data');
 const usersRef = db.ref('users');
 const aliceRef = usersRef.child('alice');
 
-// Use references
-aliceRef.set({ name: 'Alice Updated', age: 31 });
-const aliceData = aliceRef.get();
+// Use references (async)
+await aliceRef.set({ name: 'Alice', age: 30 });
+const data = await aliceRef.get();
+await aliceRef.child('email').set('alice@example.com');
+await aliceRef.remove();
 
-// Check reference
-if (aliceRef.exists()) {
-  console.log('Alice exists at:', aliceRef.toString());
-}
-
-// Remove via reference
-aliceRef.remove();
+// Navigate references
+const parentRef = aliceRef.parent();  // users
 ```
 
-### Pattern Matching
+### Pattern Matching & Range Queries
 
 ```javascript
-// Find all user names
-const names = db.getPattern('users/*/name');
-// Returns: { 'users/alice/name': 'Alice', 'users/bob/name': 'Bob' }
+// Pattern matching with wildcards
+const results = await db.getPattern('users/*/email');
+// Returns all user emails as object
 
-// Find all settings
-const settings = db.getPattern('users/*/settings/*');
+const entries = await db.getPatternEntries('logs/2024-*');
+// Returns all 2024 logs as entries array
+
+// Range queries
+const range = await db.getRange('users/a', 'users/d');
+// Returns users starting with a, b, c
+
+const rangeEntries = await db.getRangeEntries('events/2024-01', 'events/2024-02');
+// Returns January events as entries array
 ```
 
-### Range Queries
+### Type Preservation
+
+WalDB automatically preserves JavaScript types:
 
 ```javascript
-// Get all users between alice and charlie
-const someUsers = db.getRange('users/alice', 'users/charlie');
+await db.set('config', {
+  version: 1.5,           // Number preserved
+  enabled: true,          // Boolean preserved
+  name: 'MyApp',         // String preserved
+  tags: ['v1', 'prod'],  // Array preserved
+  metadata: null         // Null preserved
+});
 
-// Get all products in category A
-const productA = db.getRange('products/A000', 'products/A999');
+const config = await db.getObject('config');
+console.log(typeof config.version);  // 'number'
+console.log(typeof config.enabled);  // 'boolean'
+console.log(Array.isArray(config.tags)); // true
 ```
 
 ### Advanced Features
 
 ```javascript
-// List all keys with prefix
-const userKeys = db.listKeys('users/');
-console.log(userKeys); // ['users/alice', 'users/bob', ...]
+// Force overwrite (replaces parent nodes if needed)
+await db.set('path/to/value', 'data', true);
 
-// Force overwrite parent nodes
-db.set('data/path/child', 'child value');
-// This would normally fail:
-// db.set('data/path', 'parent value');
-// But with force it works:
-db.set('data/path', 'parent value', true);
+// Flush to disk manually
+await db.flush();
 
-// Manual flush to disk
-db.flush();
+// Atomic subtree replacement
+await db.set('users/alice', {
+  name: 'Alice',
+  profile: { age: 31, city: 'Boston' }
+});
+// Atomically replaces entire alice subtree
 ```
-
-## API Reference
-
-### WalDB Class
-
-#### Static Methods
-
-- `WalDB.open(path)` - Open or create a database at the given path
-
-#### Instance Methods
-
-- `set(path, value, force?)` - Set a value at path
-- `get(path)` - Get value or subtree at path
-- `delete(path)` - Delete path and all children
-- `exists(path)` - Check if path exists
-- `getPattern(pattern)` - Get all values matching pattern (* and ? wildcards)
-- `getRange(start, end)` - Get all values in range [start, end)
-- `listKeys(prefix)` - List all keys with given prefix
-- `flush()` - Force flush to disk
-- `ref(path?)` - Create a reference to the given path
-
-### Reference Class
-
-- `child(path)` - Get child reference
-- `set(value, force?)` - Set value at this reference
-- `get()` - Get value at this reference
-- `remove()` - Delete this reference
-- `exists()` - Check if this reference exists
-- `toString()` - Get the path of this reference
 
 ## Performance
 
-The Node.js bindings provide excellent performance through native Rust implementation:
+- **Writes**: 12,000+ operations per second
+- **Reads**: 40,000+ operations per second  
+- **Pattern matching**: ~3ms for 1000 keys
+- No async overhead - uses native threads efficiently
 
-- **Writes**: 10,000+ operations/sec
-- **Reads**: 100,000+ operations/sec
-- **Memory**: Efficient with built-in LRU cache
-- **Storage**: LSM tree with automatic compaction
+## Architecture
 
-## Building from Source
+The bindings use a three-layer architecture:
+- **Rust Core**: Handles raw storage with tree semantics
+- **FFI Layer**: Minimal bridge passing string pairs
+- **JavaScript API**: Rich type handling and convenience methods
 
-```bash
-# Install dependencies
-npm install
-
-# Build native module
-npm run build-release
-
-# Run tests
-npm test
-```
-
-## Error Handling
-
-All operations that can fail will throw JavaScript errors:
-
-```javascript
-try {
-  db.set('invalid/path', 'value');
-} catch (error) {
-  console.error('Database error:', error.message);
-}
-```
-
-## Tree Semantics
-
-WalDB enforces Firebase RTDB tree rules:
-
-```javascript
-// ✅ Valid - creates intermediate nodes
-db.set('a/b/c', 'value');
-
-// ❌ Invalid - can't overwrite parent with scalar
-db.set('a/b', 'scalar'); // Throws error
-
-// ✅ Valid - force overwrite destroys subtree  
-db.set('a/b', 'scalar', true);
-```
+No tokio, no unnecessary async complexity - just efficient std::thread usage with RwLock protection.
 
 ## License
 
-MIT License - see [LICENSE](../../LICENSE) for details.
+MIT

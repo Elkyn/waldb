@@ -11,15 +11,15 @@ WalDB is a blazingly fast embedded database with Firebase Realtime Database tree
 
 ## ✨ Features
 
-- 🚀 **Extreme Performance** - 17,000+ writes/sec, 6,000,000+ reads/sec
+- 🚀 **Extreme Performance** - 12,000+ writes/sec, 40,000+ reads/sec (Node.js)
 - 🌲 **Tree Structure** - Native hierarchical data like Firebase RTDB
 - 🔍 **Pattern Matching** - Wildcards (`*`, `?`) for flexible queries
 - 📚 **Range Queries** - Efficient pagination and scanning
 - 💾 **LSM Tree Architecture** - Log-structured merge tree with compaction
-- 🔄 **Async Support** - Non-blocking operations with Tokio
-- 🎯 **Zero Dependencies** - Pure Rust implementation (except optional async)
+- 🔄 **Thread-Safe** - RwLock protection, no async complexity
+- 🎯 **Minimal Dependencies** - Pure Rust core, simple FFI
 - 💪 **ACID Properties** - Atomic writes, crash recovery via WAL
-- 📦 **Tiny Footprint** - ~60KB of Rust code
+- 📦 **Clean Architecture** - Separated core, FFI, and language APIs
 
 ## 🚀 Quick Start
 
@@ -49,21 +49,22 @@ let names = store.get_pattern("users/*/name")?; // All user names
 let range = store.get_range("users/alice", "users/bob")?;
 ```
 
-### Node.js (Coming Soon)
+### Node.js
 
 ```javascript
-const waldb = require('@elkyn/waldb');
+const WalDB = require('@elkyn/waldb');
 
-// Open database
-const db = waldb.open('./my_data');
+// Open database (async)
+const db = await WalDB.open('./my_data');
 
 // Firebase-like API
 await db.set('users/alice/name', 'Alice Smith');
-const name = await db.get('users/alice/name');
+await db.set('users/alice/age', 30);  // Types preserved!
 
-// Get entire subtree
-const users = await db.get('users/');
-// Returns: { alice: { name: 'Alice Smith', age: '30' } }
+// Three ways to read data
+const entries = await db.get('users/alice');      // [[key, value], ...]
+const raw = await db.getRaw('users/alice');       // With type prefixes
+const obj = await db.getObject('users/alice');    // Reconstructed object
 
 // Pattern matching
 const names = await db.getPattern('users/*/name');

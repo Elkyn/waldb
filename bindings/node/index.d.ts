@@ -5,99 +5,134 @@
 
 declare module '@elkyn/waldb' {
   /**
-   * Main database class providing Firebase-like API
+   * Main database class providing Firebase-like API with async operations
    */
   export class WalDB {
-    constructor(path: string);
+    private constructor(store: any);
     
     /**
-     * Open a WalDB database
+     * Open a WalDB database (async)
+     * @param path Path to the database directory
      */
-    static open(path: string): WalDB;
+    static open(path: string): Promise<WalDB>;
     
     /**
-     * Set a value at the given path
+     * Set a value at the given path (async)
+     * @param key The path to set
+     * @param value The value to set (objects will be flattened)
+     * @param force Whether to force overwrite parent nodes
      */
-    set(key: string, value: any, force?: boolean): void;
+    set(key: string, value: any, force?: boolean): Promise<void>;
     
     /**
-     * Get a value or subtree at the given path
+     * Get entries with decoded values (default) (async)
+     * Returns array of [key, value] pairs with decoded values
+     * @param key The path to get
      */
-    get(key: string): any;
+    get(key: string): Promise<Array<[string, any]>>;
     
     /**
-     * Delete a path and all its children
+     * Get raw entries with prefixed strings (async)
+     * Returns array of [key, value] pairs with raw prefixed values like "n:42", "s:hello"
+     * @param key The path to get
      */
-    delete(key: string): void;
+    getRaw(key: string): Promise<Array<[string, string]>>;
     
     /**
-     * Check if a path exists
+     * Get value or subtree as reconstructed object (async)
+     * Returns the value or reconstructed object, null if not found
+     * @param key The path to get
      */
-    exists(key: string): boolean;
+    getObject(key: string): Promise<any>;
     
     /**
-     * Get all values matching a pattern with * and ? wildcards
+     * Delete a path and all its children (async)
+     * @param key The path to delete
      */
-    getPattern(pattern: string): Record<string, any>;
+    delete(key: string): Promise<void>;
     
     /**
-     * Get all values in a range
+     * Check if a path exists (async)
+     * @param key The path to check
      */
-    getRange(start: string, end: string): Record<string, any>;
+    exists(key: string): Promise<boolean>;
     
     /**
-     * List all keys with a given prefix
+     * Get all values matching a pattern with * and ? wildcards (async)
+     * @param pattern Pattern with wildcards
      */
-    listKeys(prefix: string): string[];
+    getPattern(pattern: string): Promise<Record<string, any>>;
     
     /**
-     * Flush pending writes to disk
+     * Get all values in a range (async)
+     * @param start Start key (inclusive)
+     * @param end End key (exclusive)
      */
-    flush(): void;
+    getRange(start: string, end: string): Promise<Record<string, any>>;
+    
+    /**
+     * Get all key-value pairs matching a pattern as entries array (async)
+     * @param pattern Pattern with * and ? wildcards
+     */
+    getPatternEntries(pattern: string): Promise<Array<[string, any]>>;
+    
+    /**
+     * Get all key-value pairs in a range as entries array (async)
+     * @param start Start key (inclusive)
+     * @param end End key (exclusive)
+     */
+    getRangeEntries(start: string, end: string): Promise<Array<[string, any]>>;
+    
+    /**
+     * Flush pending writes to disk (async)
+     */
+    flush(): Promise<void>;
     
     /**
      * Create a Firebase RTDB-style reference
+     * @param path The path to reference
      */
-    ref(path?: string): Reference;
+    ref(path: string): Reference;
   }
 
   /**
    * Firebase RTDB-style reference class
    */
   export class Reference {
+    private constructor(db: WalDB, path: string);
+    
     /**
      * Get child reference
+     * @param childPath Child path to append
      */
     child(childPath: string): Reference;
     
     /**
-     * Set value at this reference
+     * Get parent reference
      */
-    set(value: any, force?: boolean): void;
+    parent(): Reference;
     
     /**
-     * Get value at this reference
+     * Set value at this reference (async)
+     * @param value Value to set
      */
-    get(): any;
+    set(value: any): Promise<void>;
     
     /**
-     * Remove value at this reference
+     * Get value at this reference (async)
+     * Returns reconstructed object/value
      */
-    remove(): void;
+    get(): Promise<any>;
     
     /**
-     * Check if this reference exists
+     * Remove value at this reference (async)
      */
-    exists(): boolean;
-    
-    /**
-     * Get the path of this reference
-     */
-    toString(): string;
+    remove(): Promise<void>;
   }
 
-  /**
-   * Open a WalDB store
-   */
-  export function open(path: string): WalDB;
+  // Default export
+  export default WalDB;
+  
+  // Named exports for convenience
+  export { WalDB, Reference };
 }
