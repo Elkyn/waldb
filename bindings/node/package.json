@@ -39,7 +39,8 @@
     "url": "https://github.com/elkyn/waldb"
   },
   "devDependencies": {
-    "cargo-cp-artifact": "^0.1.8"
+    "cargo-cp-artifact": "^0.1.8",
+    "typescript": "^5.9.2"
   },
   "dependencies": {
     "dotenv": "^17.2.1",

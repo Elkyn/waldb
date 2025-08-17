@@ -131,8 +131,6 @@ declare module '@elkyn/waldb' {
   }
 
   // Default export
-  export default WalDB;
-  
-  // Named exports for convenience
-  export { WalDB, Reference };
+  const _default: typeof WalDB;
+  export default _default;
 }

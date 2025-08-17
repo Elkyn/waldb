@@ -28,13 +28,13 @@ class WalDB {
      * @param {boolean} [force=false] - Whether to force overwrite parent nodes
      */
     async set(key, value, force = false) {
-        if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-            // Flatten object into multiple key-value pairs
+        if (typeof value === 'object' && value !== null) {
+            // Flatten objects AND arrays into multiple key-value pairs
             const flattened = this._flattenObject(key, value);
             const replaceAt = key === '' ? null : key;
             return native.setMany(this._store, flattened, replaceAt);
         } else {
-            // Encode primitives and arrays with type prefixes
+            // Encode primitives only
             const encodedValue = this._encodeValue(value);
             return native.set(this._store, key, encodedValue, force);
         }
@@ -192,14 +192,57 @@ class WalDB {
             current[parts[parts.length - 1]] = value;
         }
         
-        return result;
+        // Convert objects with numeric keys to arrays
+        return this._convertNumericObjectsToArrays(result);
+    }
+    
+    _convertNumericObjectsToArrays(obj) {
+        if (typeof obj !== 'object' || obj === null) {
+            return obj;
+        }
+        
+        // Check if all keys are numeric
+        const keys = Object.keys(obj);
+        const isArray = keys.length > 0 && keys.every(k => /^\d+$/.test(k));
+        
+        if (isArray) {
+            // Convert to array
+            const arr = [];
+            for (const key of keys) {
+                const index = parseInt(key, 10);
+                arr[index] = this._convertNumericObjectsToArrays(obj[key]);
+            }
+            return arr;
+        } else {
+            // Recursively process object properties
+            const result = {};
+            for (const [key, value] of Object.entries(obj)) {
+                result[key] = this._convertNumericObjectsToArrays(value);
+            }
+            return result;
+        }
     }
     
     _flattenObject(basePath, obj, result = {}) {
+        // Handle arrays
+        if (Array.isArray(obj)) {
+            obj.forEach((value, index) => {
+                const fullPath = basePath ? `${basePath}/${index}` : String(index);
+                
+                if (typeof value === 'object' && value !== null) {
+                    this._flattenObject(fullPath, value, result);
+                } else {
+                    result[fullPath] = this._encodeValue(value);
+                }
+            });
+            return result;
+        }
+        
+        // Handle objects
         for (const [key, value] of Object.entries(obj)) {
             const fullPath = basePath ? `${basePath}/${key}` : key;
             
-            if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+            if (typeof value === 'object' && value !== null) {
                 this._flattenObject(fullPath, value, result);
             } else {
                 result[fullPath] = this._encodeValue(value);
@@ -217,11 +260,12 @@ class WalDB {
             return 'n:' + value;
         } else if (typeof value === 'boolean') {
             return 'b:' + value;
-        } else if (Array.isArray(value)) {
-            return 'a:' + JSON.stringify(value);
         } else if (typeof value === 'object') {
+            // This should rarely happen now since objects/arrays are flattened
+            // Only for edge cases or direct set of complex values
             return 's:' + JSON.stringify(value);
         }
+        return 's:' + String(value);
     }
     
     static _decodeValue(encoded) {
@@ -241,12 +285,6 @@ class WalDB {
             case 's': return value;
             case 'n': return Number(value);
             case 'b': return value === 'true';
-            case 'a':
-                try {
-                    return JSON.parse(value);
-                } catch {
-                    return value;
-                }
             case 'z': return null;
             default: return encoded;
         }
