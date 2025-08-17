@@ -15,10 +15,6 @@ categories = ["database", "data-structures"]
 tempfile = "3.12"
 rand = "0.8"
 
-[[bench]]
-name = "waldb_bench"
-harness = false
-path = "benches/waldb_bench.rs"
 
 [profile.release]
 opt-level = 3
