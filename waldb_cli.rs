@@ -60,17 +60,32 @@ fn main() -> io::Result<()> {
                 }
                 let key = parts[1];
                 
-                match store.get(key) {
-                    Ok(Some(value)) => {
-                        if key.ends_with('/') {
-                            // It's a subtree query, pretty print JSON
-                            println!("{}", pretty_json(&value));
-                        } else {
-                            println!("{}", value);
+                if key.ends_with('/') {
+                    // It's a prefix query - use get_pattern to list all keys
+                    let pattern = format!("{}*", key);
+                    match store.get_pattern(&pattern) {
+                        Ok(results) => {
+                            if results.is_empty() {
+                                println!("(no keys found)");
+                            } else {
+                                println!("Found {} keys:", results.len());
+                                for (k, v) in results.iter().take(20) {
+                                    println!("  {} = {}", k, truncate(v, 50));
+                                }
+                                if results.len() > 20 {
+                                    println!("  ... and {} more", results.len() - 20);
+                                }
+                            }
                         }
+                        Err(e) => println!("✗ Error: {}", e),
                     }
-                    Ok(None) => println!("(not found)"),
-                    Err(e) => println!("✗ Error: {}", e),
+                } else {
+                    // Regular get for exact key
+                    match store.get(key) {
+                        Ok(Some(value)) => println!("{}", value),
+                        Ok(None) => println!("(not found)"),
+                        Err(e) => println!("✗ Error: {}", e),
+                    }
                 }
             }
             

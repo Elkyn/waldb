@@ -15,7 +15,7 @@ npm run build-release
 npm link
 
 # In your project
-npm link @elkyn/waldb
+npm link waldb
 ```
 
 ## Features
@@ -36,7 +36,7 @@ npm link @elkyn/waldb
 ### Basic Operations
 
 ```javascript
-const WalDB = require('@elkyn/waldb');
+const WalDB = require('waldb');
 
 // Open database (async)
 const db = await WalDB.open('./my_database');

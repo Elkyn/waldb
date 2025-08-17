@@ -53,7 +53,7 @@ let range = store.get_range("users/alice", "users/bob")?;
 ### Node.js
 
 ```javascript
-const WalDB = require('@elkyn/waldb');
+const WalDB = require('waldb');
 
 // Open database (async)
 const db = await WalDB.open('./my_data');
@@ -289,7 +289,7 @@ npm run build-release
 
 # Use in your project
 npm link  # In waldb/bindings/node
-npm link @elkyn/waldb  # In your project
+npm link waldb  # In your project
 ```
 
 ## 🧪 Testing

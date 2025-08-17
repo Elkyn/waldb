@@ -1,5 +1,5 @@
 {
-  "name": "@elkyn/waldb",
+  "name": "waldb",
   "version": "0.1.0",
   "description": "Node.js bindings for WalDB - High-performance write-ahead log database with tree semantics",
   "main": "index.js",
