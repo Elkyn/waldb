@@ -4,13 +4,9 @@ on:
   release:
     types: [created]
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version to publish (e.g., 1.0.0)'
-        required: true
 
 jobs:
-  build-and-publish:
+  publish:
     runs-on: ubuntu-latest
     
     steps:
@@ -27,53 +23,18 @@ jobs:
         
       - name: Install dependencies
         working-directory: ./bindings/node
-        run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install
-          fi
+        run: npm install
+        
+      - name: Build
+        working-directory: ./bindings/node
+        run: npm run build-release
         
       - name: Run tests
         working-directory: ./bindings/node
-        run: |
-          npm run build-release
-          npm test
-          
-      - name: Update version if provided
-        if: github.event.inputs.version
-        working-directory: ./bindings/node
-        run: npm version ${{ github.event.inputs.version }} --no-git-tag-version
-        
-      - name: Build TypeScript definitions
-        working-directory: ./bindings/node
-        run: npx tsc --noEmit index.d.ts || true
+        run: npm test
         
       - name: Publish to npm
         working-directory: ./bindings/node
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          
-      - name: Create GitHub Release (if manual)
-        if: github.event.inputs.version
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: v${{ github.event.inputs.version }}
-          release_name: Release v${{ github.event.inputs.version }}
-          body: |
-            ## WalDB Node.js Bindings v${{ github.event.inputs.version }}
-            
-            ### Installation
-            ```bash
-            npm install waldb
-            ```
-            
-            ### Prebuilt binaries available for:
-            - Linux (x64, arm64)
-            - macOS (x64, arm64/M1)
-            - Windows (x64, arm64)
-          draft: false
-          prerelease: false

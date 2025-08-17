@@ -4,13 +4,6 @@
   "description": "Node.js bindings for WalDB - High-performance write-ahead log database with tree semantics",
   "main": "index.js",
   "types": "index.d.ts",
-  "binary": {
-    "module_name": "index",
-    "module_path": "./",
-    "host": "https://github.com/elkyn/waldb/releases/download/",
-    "remote_path": "v{version}",
-    "package_name": "{module_name}-v{version}-{node_abi}-{platform}-{arch}.tar.gz"
-  },
   "files": [
     "index.js",
     "index.d.ts",
@@ -21,9 +14,6 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "install": "prebuild-install --runtime napi --target 6 || npm run build-release",
-    "prebuild": "npm run build-release && prebuild --runtime napi --target 6 --strip",
-    "prebuild-all": "npm run build-release && prebuild --runtime napi --target 6 --all --strip",
     "build": "cargo-cp-artifact -ac waldb-node index.node -- cargo build --message-format=json-render-diagnostics",
     "build-debug": "npm run build --",
     "build-release": "npm run build -- --release",
@@ -32,8 +22,7 @@
     "test-types": "node test-types.js",
     "test-complete": "node test-complete.js",
     "test-vector": "node test-vector-search.js",
-    "test-files": "node test-files.js",
-    "upload": "prebuild --upload-all"
+    "test-files": "node test-files.js"
   },
   "keywords": [
     "database",
@@ -50,12 +39,8 @@
     "type": "git",
     "url": "https://github.com/elkyn/waldb"
   },
-  "dependencies": {
-    "prebuild-install": "^7.1.2"
-  },
   "devDependencies": {
     "cargo-cp-artifact": "^0.1.8",
-    "prebuild": "^13.0.1",
     "typescript": "^5.9.2"
   }
 }
